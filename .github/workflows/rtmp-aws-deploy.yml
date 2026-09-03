@@ -103,6 +103,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Debug OIDC token claims
+        run: |
+          JWT=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          echo "Raw token: $JWT"
+          echo "$JWT" | cut -d. -f2 | base64 -d | jq . || echo "Could not decode claims"
+
+      - name: Debug manual assume-role-with-web-identity
+        run: |
+          JWT=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          aws sts assume-role-with-web-identity \
+            --role-arn "${{ secrets.AWS_GITHUB_DEPLOY_ROLE_ARN }}" \
+            --role-session-name debug \
+            --web-identity-token "$JWT"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
