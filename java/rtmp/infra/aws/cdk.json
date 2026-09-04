@@ -4,7 +4,7 @@
     "@aws-cdk/aws-autoscaling:generateLaunchTemplateInsteadOfLaunchConfig": true,
     "deployMode": "cheap",
     "appImage": "public.ecr.aws/docker/library/eclipse-temurin:21-jre",
-    "instanceType": "t4g.micro",
+    "instanceType": "t4g.nano",
     "desiredAppCount": 1,
     "maxAppCount": 3,
     "enableAlb": false,

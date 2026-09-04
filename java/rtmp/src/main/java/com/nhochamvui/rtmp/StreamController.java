@@ -1,8 +1,11 @@
 package com.nhochamvui.rtmp;
 
 import com.nhochamvui.rtmp.core.ClientSession;
+import com.nhochamvui.rtmp.core.NodeHealthProbe;
 import com.nhochamvui.rtmp.core.Server;
 import io.micronaut.context.annotation.Value;
+import io.micronaut.http.HttpResponse;
+import io.micronaut.http.HttpStatus;
 import io.micronaut.http.MediaType;
 import io.micronaut.http.annotation.Controller;
 import io.micronaut.http.annotation.Get;
@@ -19,13 +22,21 @@ import java.util.Set;
 public class StreamController {
 
     private final Server server;
+    private final NodeHealthProbe nodeHealthProbe;
     private String indexHtml;
 
     @Value("${rtmp.hls.cdn-url:}")
     String hlsCdnUrl;
 
-    public StreamController(Server server) {
+    @Value("${rtmp.health.max-cpu-pct:95}")
+    double maxCpuPct;
+
+    @Value("${rtmp.health.max-mem-pct:90}")
+    double maxMemPct;
+
+    public StreamController(Server server, NodeHealthProbe nodeHealthProbe) {
         this.server = server;
+        this.nodeHealthProbe = nodeHealthProbe;
     }
 
     @Get("/config")
@@ -62,6 +73,26 @@ public class StreamController {
         result.put("activeStreams", names.size());
         result.put("streams", new ArrayList<>(names));
         return result;
+    }
+
+    @Get("/health/ready")
+    @Produces(MediaType.APPLICATION_JSON)
+    HttpResponse<Map<String, Object>> healthReady() {
+        double cpuPct = nodeHealthProbe.cpuUsagePct();
+        double memPct = nodeHealthProbe.memoryUsagePct();
+        boolean overloaded = cpuPct >= maxCpuPct || memPct >= maxMemPct;
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", overloaded ? "unhealthy" : "healthy");
+        body.put("cpuPct", cpuPct);
+        body.put("memPct", memPct);
+        Map<String, Object> limits = new LinkedHashMap<>();
+        limits.put("cpuPct", maxCpuPct);
+        limits.put("memPct", maxMemPct);
+        body.put("limits", limits);
+
+        HttpStatus status = overloaded ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.OK;
+        return HttpResponse.status(status).body(body);
     }
 
     @Get("/stats")
