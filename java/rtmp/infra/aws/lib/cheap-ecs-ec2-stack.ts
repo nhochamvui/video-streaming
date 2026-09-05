@@ -118,13 +118,12 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     userData,
     minCapacity: ecsInstanceCount,
     maxCapacity: Math.max(config.maxAppCount, ecsInstanceCount),
-    desiredCapacity: ecsInstanceCount,
     vpcSubnets: { subnetType: SubnetType.PUBLIC }
   });
 
   const capacityProvider = new AsgCapacityProvider(scope, 'CapacityProvider', {
     autoScalingGroup,
-    enableManagedTerminationProtection: false
+    enableManagedTerminationProtection: true
   });
   cluster.addAsgCapacityProvider(capacityProvider);
 
@@ -142,6 +141,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     assumedBy: new ServicePrincipal('ecs-tasks.amazonaws.com')
   });
   storage.bucket.grantReadWrite(taskRole);
+  cluster.grants.taskProtection(taskRole);
   executionRole.addToPolicy(new PolicyStatement({
     actions: ['ssm:GetParameter', 'ssm:GetParameters'],
     resources: [
@@ -337,7 +337,7 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
   );
   appContainer.addMountPoints({ containerPath: '/app/hls', sourceVolume: 'hls', readOnly: false });
 
-  new Ec2Service(scope, 'AppService', {
+  const appService = new Ec2Service(scope, 'AppService', {
     cluster,
     taskDefinition,
     desiredCount: Math.max(1, config.desiredAppCount),
@@ -346,6 +346,20 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
     maxHealthyPercent: 100,
     placementConstraints: [PlacementConstraint.distinctInstances()],
     capacityProviderStrategies: [{ capacityProvider: refs.capacityProviderName, weight: 1 }]
+  });
+
+  const scaling = appService.autoScaleTaskCount({
+    minCapacity: Math.max(1, config.desiredAppCount),
+    maxCapacity: config.maxAppCount
+  });
+  scaling.scaleOnCpuUtilization('CpuScaling', {
+    targetUtilizationPercent: 90,
+    scaleInCooldown: cdk.Duration.minutes(15),
+    scaleOutCooldown: cdk.Duration.minutes(2)
+  });
+  scaling.scaleOnMemoryUtilization('MemoryScaling', {
+    targetUtilizationPercent: 90,
+    disableScaleIn: true
   });
 
   new cdk.CfnOutput(scope, 'HttpUrl', { value: `http://${config.rtmpHost}/` });

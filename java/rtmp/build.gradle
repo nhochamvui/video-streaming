@@ -20,6 +20,8 @@ dependencies {
     // implementation("io.micronaut:micronaut-scheduling")
     implementation("io.micronaut.serde:micronaut-serde-jackson")
     implementation("io.lettuce:lettuce-core:6.5.5.RELEASE")
+    implementation("software.amazon.awssdk:ecs")
+    implementation("software.amazon.awssdk:url-connection-client")
     compileOnly("io.micronaut:micronaut-http-client")
     runtimeOnly("ch.qos.logback:logback-classic")
     testImplementation("io.micronaut:micronaut-http-client")
@@ -92,6 +94,8 @@ graalvmNative.binaries.main {
     buildArgs.addAll(
         "--report-unsupported-elements-at-runtime",
         "--no-fallback",
+        "--enable-url-protocols=https",
+        "--enable-all-security-services",
         "-H:IncludeResources=static/index.html",
         nativeImageMemory
     )
