@@ -241,7 +241,9 @@ export function createManagedApp(scope: Construct, config: InfraConfig, refs: Ma
       RTMP_HLS_ROOT: '/app/hls',
       RTMP_HLS_BUCKET: refs.bucketName,
       RTMP_HLS_REGION: Stack.of(scope).region,
-      RTMP_AUTH_USERNAME: config.rtmpAuthUsername
+      RTMP_AUTH_USERNAME: config.rtmpAuthUsername,
+      RTMP_MAX_PENDING_PER_IP: '10',
+      RTMP_MAX_ACTIVE_PER_IP: '10'
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
   });

@@ -173,7 +173,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     ...TRAEFIK_DYNAMIC_TEMPLATE.split('\n'),
     'EOF',
     'docker run -d --name redis --restart unless-stopped -p 6379:6379 redis:7-alpine',
-    'docker run -d --name traefik --restart unless-stopped --network host -v /etc/traefik:/etc/traefik:ro traefik:v3.1',
+    'docker run -d --name traefik --restart unless-stopped --network host -v /etc/traefik:/etc/traefik:ro traefik:v3.7',
     'cat > /usr/local/bin/render-traefik-backends <<\'EOF\'',
     '#!/bin/bash',
     'set -euo pipefail',
@@ -315,7 +315,9 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
       RTMP_HLS_ROOT: '/app/hls',
       RTMP_HLS_BUCKET: refs.bucketName,
       RTMP_HLS_REGION: Stack.of(scope).region,
-      RTMP_AUTH_USERNAME: config.rtmpAuthUsername
+      RTMP_AUTH_USERNAME: config.rtmpAuthUsername,
+      RTMP_MAX_PENDING_PER_IP: '10',
+      RTMP_MAX_ACTIVE_PER_IP: '10'
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
   });
