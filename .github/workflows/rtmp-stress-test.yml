@@ -6,8 +6,14 @@
 #   RTMP_USERNAME   = UI/API login username (REQUIRED)
 #   RTMP_PASSWORD   = UI/API login password (REQUIRED)
 #
-# Each bot logs in, creates a stream session via the API to obtain its stream
-# key, then publishes to rtmp://host:1935/live/<streamKey>.
+# Each runner logs in once, creates a stream session per bot via the API to
+# obtain a stream key, then publishes each bot to rtmp://host:1935/live/<key>.
+# Multiple ffmpeg bots run concurrently per runner (bots_per_runner), so total
+# concurrency = runner jobs x bots_per_runner. On GitHub Free, 20 concurrent
+# jobs x 5 bots = 100 concurrent streams.
+#
+# Publish failures are retried (connectivity/scale-out lag) and expired
+# sessions are re-created, up to a bounded number of rounds.
 #
 # Triggers: manual (workflow_dispatch) + cron (schedule)
 
@@ -17,10 +23,15 @@ on:
   workflow_dispatch:
     inputs:
       bot_count:
-        description: "Number of concurrent bots"
+        description: "Total number of bots across all runners"
         required: true
         type: number
-        default: 10
+        default: 100
+      bots_per_runner:
+        description: "Concurrent bots per runner job"
+        required: true
+        type: number
+        default: 5
       bot_duration:
         description: "Stream duration per bot (seconds)"
         required: true
@@ -36,8 +47,13 @@ on:
         required: false
         type: string
         default: "2500k"
+      burst_bot_count:
+        description: "Total number of bots in burst mode"
+        required: true
+        type: number
+        default: 100
       burst_mode:
-        description: "Enable 20-bot high-concurrency burst"
+        description: "Enable low-res high-concurrency burst"
         required: false
         type: boolean
         default: false
@@ -45,50 +61,61 @@ on:
     - cron: "*/30 * * * *"
 
 env:
-  RTMP_HOST: ${{ secrets.RTMP_HOST || 'zoutube.duckdns.org' }}
+  RTMP_HOST: ${{ secrets.RTMP_HOST }}
   RTMP_PORT: ${{ secrets.RTMP_PORT || '1935' }}
   RTMP_API_PORT: ${{ secrets.RTMP_API_PORT || '80' }}
   RTMP_USERNAME: ${{ secrets.RTMP_USERNAME }}
   RTMP_PASSWORD: ${{ secrets.RTMP_PASSWORD }}
 
 jobs:
-  # ─── Dynamically generate bot ID array (needed for matrix) ──────────────────
+  # ─── Dynamically generate runner ID array (needed for matrix) ───────────────
   matrix-generator:
     runs-on: ubuntu-latest
     outputs:
-      bot_ids: ${{ steps.gen.outputs.bot_ids }}
+      runner_ids: ${{ steps.gen.outputs.runner_ids }}
     steps:
       - id: gen
         run: |
-          COUNT=${{ inputs.bot_count || 10 }}
+          if [ "${{ inputs.burst_mode }}" = "true" ]; then
+            COUNT=${{ inputs.burst_bot_count || 100 }}
+          else
+            COUNT=${{ inputs.bot_count || 100 }}
+          fi
+          BPR=${{ inputs.bots_per_runner || 5 }}
+          RUNNERS=$(( (COUNT + BPR - 1) / BPR ))
           IDS="["
-          for i in $(seq 0 $((COUNT - 1))); do
+          for i in $(seq 0 $((RUNNERS - 1))); do
             [ "$i" -gt 0 ] && IDS="${IDS},"
             IDS="${IDS}${i}"
           done
           IDS="${IDS}]"
-          echo "bot_ids=${IDS}" >> "$GITHUB_OUTPUT"
+          echo "runner_ids=${IDS}" >> "$GITHUB_OUTPUT"
 
-  # ─── Normal stress test (matrix of N bots) ──────────────────────────────────
+  # ─── Normal stress test (multi-bot runners, matrix of runners) ──────────────
   rtmp-bot:
     needs: matrix-generator
     if: ${{ !inputs.burst_mode && vars.SKIP_SCHEDULED != 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        bot_id: ${{ fromJSON(needs.matrix-generator.outputs.bot_ids) }}
+        runner_id: ${{ fromJSON(needs.matrix-generator.outputs.runner_ids) }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
       - name: Install FFmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
-      - name: Run RTMP bot
+      - name: Run RTMP bots
         run: |
           DURATION=${{ inputs.bot_duration || 300 }}
           RES=${{ inputs.resolution || '1280x720' }}
           BR=${{ inputs.bitrate || '2500k' }}
+          BPR=${{ inputs.bots_per_runner || 5 }}
+          COUNT_TOTAL=${{ inputs.bot_count || 100 }}
           API_BASE="http://${RTMP_HOST}:${RTMP_API_PORT}"
+          START=$(( ${{ matrix.runner_id }} * BPR ))
+          END=$(( START + BPR ))
+          if [ "$END" -gt "$COUNT_TOTAL" ]; then END=$COUNT_TOTAL; fi
 
           LOGIN_CODE=$(curl -sS -o /tmp/login.json -w '%{http_code}' -c cookies.txt \
             -X POST "${API_BASE}/api/v1/auth/login" \
@@ -100,63 +127,92 @@ jobs:
             exit 1
           fi
 
-          SESSION_RESP=""
-          STREAM_KEY=""
-          for attempt in 1 2 3; do
-            SESSION_CODE=$(curl -sS -o /tmp/session.json -w '%{http_code}' -b cookies.txt \
-              -X POST "${API_BASE}/api/v1/stream-sessions")
-            STREAM_KEY=$(jq -r '.streamKey // empty' /tmp/session.json)
-            if [ "$SESSION_CODE" = "201" ] && [ -n "$STREAM_KEY" ]; then
-              SESSION_RESP=$(cat /tmp/session.json)
-              break
-            fi
-            echo "Session creation attempt ${attempt}/3 failed (HTTP ${SESSION_CODE})"
-            cat /tmp/session.json
-            [ "$attempt" -lt 3 ] && sleep $((attempt * 5))
+          create_session() {
+            local out=$1
+            for attempt in 1 2 3; do
+              SESSION_CODE=$(curl -sS -o "$out" -w '%{http_code}' -b cookies.txt \
+                -X POST "${API_BASE}/api/v1/stream-sessions")
+              KEY=$(jq -r '.streamKey // empty' "$out")
+              if [ "$SESSION_CODE" = "201" ] && [ -n "$KEY" ]; then
+                echo "$KEY"
+                return 0
+              fi
+              echo "Session creation attempt ${attempt}/3 failed (HTTP ${SESSION_CODE})" >&2
+              cat "$out" >&2
+              [ "$attempt" -lt 3 ] && sleep 5
+            done
+            echo ""
+            return 1
+          }
+
+          run_bot() {
+            local bot=$1
+            local out="/tmp/session-$bot.json"
+            local log="ffmpeg-bot-$bot.log"
+            local round key
+            for round in 1 2 3; do
+              key=$(create_session "$out") || return 1
+              if [ -z "$key" ]; then
+                echo "Bot ${bot} (round ${round}/3): failed to create stream session" > "$log"
+                return 1
+              fi
+              PLAYBACK_URL=$(jq -r '.playbackUrl // empty' "$out")
+              echo "Bot ${bot} → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${key} (playback: ${PLAYBACK_URL}, round ${round}/3)" > "$log"
+              for attempt in $(seq 1 30); do
+                if ffmpeg \
+                  -re \
+                  -f lavfi -i "testsrc=duration=${DURATION}:size=${RES}:rate=30" \
+                  -f lavfi -i "sine=frequency=440:duration=${DURATION}" \
+                  -c:v libx264 -preset ultrafast -tune zerolatency -b:v "${BR}" \
+                  -c:a aac -b:a 64k \
+                  -f flv \
+                  "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${key}" >> "$log" 2>&1; then
+                  return 0
+                fi
+                echo "Bot ${bot}: publish attempt ${attempt}/30 failed, retrying in 10s" >> "$log"
+                [ "$attempt" -lt 30 ] && sleep 10
+              done
+              echo "Bot ${bot}: stream key expired, re-creating session" >> "$log"
+            done
+            return 1
+          }
+
+          echo "Runner ${{ matrix.runner_id }} → bots ${START}..$((END-1)) | Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
+          for BOT in $(seq "$START" $((END - 1))); do
+            run_bot "$BOT" &
           done
-          if [ -z "$STREAM_KEY" ]; then
-            echo "Failed to create stream session"
-            exit 1
-          fi
-
-          PLAYBACK_URL=$(echo "$SESSION_RESP" | jq -r '.playbackUrl // empty')
-          echo "Bot ${{ matrix.bot_id }} → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
-          echo "Playback: ${PLAYBACK_URL} | Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
-
-          ffmpeg \
-            -re \
-            -f lavfi -i "testsrc=duration=${DURATION}:size=${RES}:rate=30" \
-            -f lavfi -i "sine=frequency=440:duration=${DURATION}" \
-            -c:v libx264 -preset ultrafast -tune zerolatency -b:v "${BR}" \
-            -c:a aac -b:a 64k \
-            -f flv \
-            "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
-          | tee "ffmpeg-bot-${{ matrix.bot_id }}.log"
+          wait
 
       - name: Upload FFmpeg logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-logs-bot-${{ matrix.bot_id }}
+          name: ffmpeg-logs-runner-${{ matrix.runner_id }}
           path: ffmpeg-bot-*.log
           retention-days: 1
 
-  # ─── Burst mode: 20 low-res bots × 2 minutes — max concurrency ──────────────
+  # ─── Burst mode: low-res bots x 2 minutes — max concurrency ─────────────────
   burst:
+    needs: matrix-generator
     if: ${{ inputs.burst_mode == true }}
     strategy:
       fail-fast: false
       matrix:
-        bot_id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        runner_id: ${{ fromJSON(needs.matrix-generator.outputs.runner_ids) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Install FFmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
-      - name: Run burst bot
+      - name: Run burst bots
         run: |
+          BPR=${{ inputs.bots_per_runner || 5 }}
+          COUNT_TOTAL=${{ inputs.burst_bot_count || 100 }}
           API_BASE="http://${RTMP_HOST}:${RTMP_API_PORT}"
+          START=$(( ${{ matrix.runner_id }} * BPR ))
+          END=$(( START + BPR ))
+          if [ "$END" -gt "$COUNT_TOTAL" ]; then END=$COUNT_TOTAL; fi
 
           LOGIN_CODE=$(curl -sS -o /tmp/login.json -w '%{http_code}' -c cookies.txt \
             -X POST "${API_BASE}/api/v1/auth/login" \
@@ -168,43 +224,66 @@ jobs:
             exit 1
           fi
 
-          SESSION_RESP=""
-          STREAM_KEY=""
-          for attempt in 1 2 3; do
-            SESSION_CODE=$(curl -sS -o /tmp/session.json -w '%{http_code}' -b cookies.txt \
-              -X POST "${API_BASE}/api/v1/stream-sessions")
-            STREAM_KEY=$(jq -r '.streamKey // empty' /tmp/session.json)
-            if [ "$SESSION_CODE" = "201" ] && [ -n "$STREAM_KEY" ]; then
-              SESSION_RESP=$(cat /tmp/session.json)
-              break
-            fi
-            echo "Session creation attempt ${attempt}/3 failed (HTTP ${SESSION_CODE})"
-            cat /tmp/session.json
-            [ "$attempt" -lt 3 ] && sleep $((attempt * 5))
+          create_session() {
+            local out=$1
+            for attempt in 1 2 3; do
+              SESSION_CODE=$(curl -sS -o "$out" -w '%{http_code}' -b cookies.txt \
+                -X POST "${API_BASE}/api/v1/stream-sessions")
+              KEY=$(jq -r '.streamKey // empty' "$out")
+              if [ "$SESSION_CODE" = "201" ] && [ -n "$KEY" ]; then
+                echo "$KEY"
+                return 0
+              fi
+              echo "Session creation attempt ${attempt}/3 failed (HTTP ${SESSION_CODE})" >&2
+              cat "$out" >&2
+              [ "$attempt" -lt 3 ] && sleep 5
+            done
+            echo ""
+            return 1
+          }
+
+          run_bot() {
+            local bot=$1
+            local out="/tmp/session-$bot.json"
+            local log="ffmpeg-burst-$bot.log"
+            local round key
+            for round in 1 2 3; do
+              key=$(create_session "$out") || return 1
+              if [ -z "$key" ]; then
+                echo "Burst bot ${bot} (round ${round}/3): failed to create stream session" > "$log"
+                return 1
+              fi
+              PLAYBACK_URL=$(jq -r '.playbackUrl // empty' "$out")
+              echo "Burst bot ${bot} → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${key} (playback: ${PLAYBACK_URL}, round ${round}/3)" > "$log"
+              for attempt in $(seq 1 30); do
+                if ffmpeg \
+                  -re \
+                  -f lavfi -i "testsrc=duration=120:size=640x360:rate=30" \
+                  -f lavfi -i "sine=frequency=440:duration=120" \
+                  -c:v libx264 -preset ultrafast -tune zerolatency -b:v 800k \
+                  -c:a aac -b:a 48k \
+                  -f flv \
+                  "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${key}" >> "$log" 2>&1; then
+                  return 0
+                fi
+                echo "Burst bot ${bot}: publish attempt ${attempt}/30 failed, retrying in 10s" >> "$log"
+                [ "$attempt" -lt 30 ] && sleep 10
+              done
+              echo "Burst bot ${bot}: stream key expired, re-creating session" >> "$log"
+            done
+            return 1
+          }
+
+          echo "Burst runner ${{ matrix.runner_id }} → bots ${START}..$((END-1))"
+          for BOT in $(seq "$START" $((END - 1))); do
+            run_bot "$BOT" &
           done
-          if [ -z "$STREAM_KEY" ]; then
-            echo "Failed to create stream session"
-            exit 1
-          fi
-
-          PLAYBACK_URL=$(echo "$SESSION_RESP" | jq -r '.playbackUrl // empty')
-          echo "Burst bot ${{ matrix.bot_id }}/20 → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
-          echo "Playback: ${PLAYBACK_URL}"
-
-          ffmpeg \
-            -re \
-            -f lavfi -i "testsrc=duration=120:size=640x360:rate=30" \
-            -f lavfi -i "sine=frequency=440:duration=120" \
-            -c:v libx264 -preset ultrafast -tune zerolatency -b:v 800k \
-            -c:a aac -b:a 48k \
-            -f flv \
-            "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}" 2>&1 \
-          | tee "ffmpeg-burst-${{ matrix.bot_id }}.log"
+          wait
 
       - name: Upload burst logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-logs-burst-${{ matrix.bot_id }}
+          name: ffmpeg-logs-burst-runner-${{ matrix.runner_id }}
           path: ffmpeg-burst-*.log
           retention-days: 1
