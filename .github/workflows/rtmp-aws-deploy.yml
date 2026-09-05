@@ -24,7 +24,7 @@ on:
         description: "App image build type: native (Dockerfile.native) or jvm (Dockerfile)"
         required: false
         type: choice
-        default: "jvm"
+        default: "native"
         options:
           - jvm
           - native
@@ -52,12 +52,12 @@ on:
         description: "Cheap-mode ECS EC2 instance type"
         required: true
         type: string
-        default: "t4g.micro"
+        default: "t4g.nano"
       rtmp_host:
         description: "RTMP host advertised to streamers. For cheap mode, point a domain to the proxy Elastic IP output."
         required: false
         type: string
-        default: "replace-after-deploy.example.com"
+        default: "zoutube.duckdns.com"
       admin_cidr:
         description: "CIDR allowed to SSH to cheap-mode EC2"
         required: false
