@@ -1,7 +1,13 @@
 # ─── RTMP Stress Test — GitHub Actions ────────────────────────────────────────
 # Set these secrets in repo: Settings > Secrets and variables > Actions
-#   RTMP_HOST    = your-server-ip-or-domain (REQUIRED)
-#   RTMP_PORT    = 1935 (optional)
+#   RTMP_HOST       = your-server-ip-or-domain (REQUIRED)
+#   RTMP_PORT       = 1935 (optional)
+#   RTMP_API_PORT   = HTTP API port, 80 (optional)
+#   RTMP_USERNAME   = UI/API login username (REQUIRED)
+#   RTMP_PASSWORD   = UI/API login password (REQUIRED)
+#
+# Each bot logs in, creates a stream session via the API to obtain its stream
+# key, then publishes to rtmp://host:1935/live/<streamKey>.
 #
 # Triggers: manual (workflow_dispatch) + cron (schedule)
 
@@ -39,8 +45,11 @@ on:
     - cron: "*/30 * * * *"
 
 env:
-  RTMP_HOST: ${{ secrets.RTMP_HOST }}
+  RTMP_HOST: ${{ secrets.RTMP_HOST || 'zoutube.duckdns.org' }}
   RTMP_PORT: ${{ secrets.RTMP_PORT || '1935' }}
+  RTMP_API_PORT: ${{ secrets.RTMP_API_PORT || '80' }}
+  RTMP_USERNAME: ${{ secrets.RTMP_USERNAME }}
+  RTMP_PASSWORD: ${{ secrets.RTMP_PASSWORD }}
 
 jobs:
   # ─── Dynamically generate bot ID array (needed for matrix) ──────────────────
@@ -76,13 +85,43 @@ jobs:
 
       - name: Run RTMP bot
         run: |
-          STREAM_KEY="bot-${GITHUB_RUN_ID}-${{ matrix.bot_id }}-$(openssl rand -hex 4)"
           DURATION=${{ inputs.bot_duration || 300 }}
           RES=${{ inputs.resolution || '1280x720' }}
           BR=${{ inputs.bitrate || '2500k' }}
+          API_BASE="http://${RTMP_HOST}:${RTMP_API_PORT}"
 
+          LOGIN_CODE=$(curl -sS -o /tmp/login.json -w '%{http_code}' -c cookies.txt \
+            -X POST "${API_BASE}/api/v1/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${RTMP_USERNAME}\",\"password\":\"${RTMP_PASSWORD}\"}")
+          if [ "$LOGIN_CODE" != "200" ]; then
+            echo "Login failed (HTTP ${LOGIN_CODE})"
+            cat /tmp/login.json
+            exit 1
+          fi
+
+          SESSION_RESP=""
+          STREAM_KEY=""
+          for attempt in 1 2 3; do
+            SESSION_CODE=$(curl -sS -o /tmp/session.json -w '%{http_code}' -b cookies.txt \
+              -X POST "${API_BASE}/api/v1/stream-sessions")
+            STREAM_KEY=$(jq -r '.streamKey // empty' /tmp/session.json)
+            if [ "$SESSION_CODE" = "201" ] && [ -n "$STREAM_KEY" ]; then
+              SESSION_RESP=$(cat /tmp/session.json)
+              break
+            fi
+            echo "Session creation attempt ${attempt}/3 failed (HTTP ${SESSION_CODE})"
+            cat /tmp/session.json
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 5))
+          done
+          if [ -z "$STREAM_KEY" ]; then
+            echo "Failed to create stream session"
+            exit 1
+          fi
+
+          PLAYBACK_URL=$(echo "$SESSION_RESP" | jq -r '.playbackUrl // empty')
           echo "Bot ${{ matrix.bot_id }} → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
-          echo "Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
+          echo "Playback: ${PLAYBACK_URL} | Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
 
           ffmpeg \
             -re \
@@ -117,8 +156,40 @@ jobs:
 
       - name: Run burst bot
         run: |
-          STREAM_KEY="burst-${GITHUB_RUN_ID}-${{ matrix.bot_id }}-$(openssl rand -hex 4)"
+          API_BASE="http://${RTMP_HOST}:${RTMP_API_PORT}"
+
+          LOGIN_CODE=$(curl -sS -o /tmp/login.json -w '%{http_code}' -c cookies.txt \
+            -X POST "${API_BASE}/api/v1/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${RTMP_USERNAME}\",\"password\":\"${RTMP_PASSWORD}\"}")
+          if [ "$LOGIN_CODE" != "200" ]; then
+            echo "Login failed (HTTP ${LOGIN_CODE})"
+            cat /tmp/login.json
+            exit 1
+          fi
+
+          SESSION_RESP=""
+          STREAM_KEY=""
+          for attempt in 1 2 3; do
+            SESSION_CODE=$(curl -sS -o /tmp/session.json -w '%{http_code}' -b cookies.txt \
+              -X POST "${API_BASE}/api/v1/stream-sessions")
+            STREAM_KEY=$(jq -r '.streamKey // empty' /tmp/session.json)
+            if [ "$SESSION_CODE" = "201" ] && [ -n "$STREAM_KEY" ]; then
+              SESSION_RESP=$(cat /tmp/session.json)
+              break
+            fi
+            echo "Session creation attempt ${attempt}/3 failed (HTTP ${SESSION_CODE})"
+            cat /tmp/session.json
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 5))
+          done
+          if [ -z "$STREAM_KEY" ]; then
+            echo "Failed to create stream session"
+            exit 1
+          fi
+
+          PLAYBACK_URL=$(echo "$SESSION_RESP" | jq -r '.playbackUrl // empty')
           echo "Burst bot ${{ matrix.bot_id }}/20 → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${STREAM_KEY}"
+          echo "Playback: ${PLAYBACK_URL}"
 
           ffmpeg \
             -re \
