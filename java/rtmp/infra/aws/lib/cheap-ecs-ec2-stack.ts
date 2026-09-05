@@ -146,7 +146,9 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     actions: ['ssm:GetParameter', 'ssm:GetParameters'],
     resources: [
       `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/hmac-secret`,
-      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/auth-password`
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/auth-password`,
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/max-pending-per-ip`,
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/max-active-per-ip`
     ]
   }));
 
@@ -289,6 +291,14 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
     parameterName: '/rtmp/demo/auth-password',
     simpleName: false
   });
+  const maxPendingPerIpParameter = StringParameter.fromStringParameterAttributes(scope, 'MaxPendingPerIpParameter', {
+    parameterName: '/rtmp/demo/max-pending-per-ip',
+    simpleName: false
+  });
+  const maxActivePerIpParameter = StringParameter.fromStringParameterAttributes(scope, 'MaxActivePerIpParameter', {
+    parameterName: '/rtmp/demo/max-active-per-ip',
+    simpleName: false
+  });
 
   const taskDefinition = new Ec2TaskDefinition(scope, 'AppTask', {
     networkMode: NetworkMode.HOST,
@@ -302,7 +312,9 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
     memoryLimitMiB: 640,
     secrets: {
       RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter),
-      RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter)
+      RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter),
+      RTMP_MAX_PENDING_PER_IP: Secret.fromSsmParameter(maxPendingPerIpParameter),
+      RTMP_MAX_ACTIVE_PER_IP: Secret.fromSsmParameter(maxActivePerIpParameter)
     },
     environment: {
       MICRONAUT_SERVER_PORT: '8888',
@@ -315,9 +327,7 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
       RTMP_HLS_ROOT: '/app/hls',
       RTMP_HLS_BUCKET: refs.bucketName,
       RTMP_HLS_REGION: Stack.of(scope).region,
-      RTMP_AUTH_USERNAME: config.rtmpAuthUsername,
-      RTMP_MAX_PENDING_PER_IP: '10',
-      RTMP_MAX_ACTIVE_PER_IP: '10'
+      RTMP_AUTH_USERNAME: config.rtmpAuthUsername
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
   });

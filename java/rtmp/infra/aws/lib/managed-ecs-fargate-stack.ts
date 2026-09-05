@@ -158,7 +158,9 @@ export function createManagedInfra(scope: Construct, config: InfraConfig): Manag
     actions: ['ssm:GetParameter', 'ssm:GetParameters'],
     resources: [
       `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/hmac-secret`,
-      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/auth-password`
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/auth-password`,
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/max-pending-per-ip`,
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/max-active-per-ip`
     ]
   }));
 
@@ -213,6 +215,14 @@ export function createManagedApp(scope: Construct, config: InfraConfig, refs: Ma
     parameterName: '/rtmp/demo/auth-password',
     simpleName: false
   });
+  const maxPendingPerIpParameter = StringParameter.fromStringParameterAttributes(scope, 'MaxPendingPerIpParameter', {
+    parameterName: '/rtmp/demo/max-pending-per-ip',
+    simpleName: false
+  });
+  const maxActivePerIpParameter = StringParameter.fromStringParameterAttributes(scope, 'MaxActivePerIpParameter', {
+    parameterName: '/rtmp/demo/max-active-per-ip',
+    simpleName: false
+  });
   const serviceSecurityGroup = SecurityGroup.fromSecurityGroupId(scope, 'ServiceSecurityGroup', refs.serviceSecurityGroupId);
 
   const advertisedRtmpHost = config.enableNlb ? refs.nlbDnsName : config.rtmpHost;
@@ -229,7 +239,9 @@ export function createManagedApp(scope: Construct, config: InfraConfig, refs: Ma
     image: ContainerImage.fromRegistry(config.appImage),
     secrets: {
       RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter),
-      RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter)
+      RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter),
+      RTMP_MAX_PENDING_PER_IP: Secret.fromSsmParameter(maxPendingPerIpParameter),
+      RTMP_MAX_ACTIVE_PER_IP: Secret.fromSsmParameter(maxActivePerIpParameter)
     },
     environment: {
       REDIS_URI: refs.redisUri,
@@ -241,9 +253,7 @@ export function createManagedApp(scope: Construct, config: InfraConfig, refs: Ma
       RTMP_HLS_ROOT: '/app/hls',
       RTMP_HLS_BUCKET: refs.bucketName,
       RTMP_HLS_REGION: Stack.of(scope).region,
-      RTMP_AUTH_USERNAME: config.rtmpAuthUsername,
-      RTMP_MAX_PENDING_PER_IP: '10',
-      RTMP_MAX_ACTIVE_PER_IP: '10'
+      RTMP_AUTH_USERNAME: config.rtmpAuthUsername
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
   });
