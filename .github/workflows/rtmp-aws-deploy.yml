@@ -63,6 +63,11 @@ on:
         required: false
         type: string
         default: "0.0.0.0/0"
+      ecs_ami_name:
+        description: "Pin ECS-optimized AL2023 AMI name (e.g. al2023-ami-ecs-20260901-arm64). Empty = latest."
+        required: false
+        type: string
+        default: ""
       enable_alb:
         description: "Managed mode: create ALB for HTTP/UI/API"
         required: false
@@ -209,7 +214,8 @@ jobs:
             -c adminCidr="${{ inputs.admin_cidr }}" \
             -c enableAlb="${{ inputs.enable_alb }}" \
             -c enableNlb="${{ inputs.enable_nlb }}" \
-            -c enableElastiCache="${{ inputs.enable_elasticache }}"
+            -c enableElastiCache="${{ inputs.enable_elasticache }}" \
+            -c ecsAmiName="${{ inputs.ecs_ami_name }}"
 
       - name: CDK deploy
         if: ${{ inputs.action == 'deploy' }}
@@ -227,7 +233,8 @@ jobs:
             -c adminCidr="${{ inputs.admin_cidr }}" \
             -c enableAlb="${{ inputs.enable_alb }}" \
             -c enableNlb="${{ inputs.enable_nlb }}" \
-            -c enableElastiCache="${{ inputs.enable_elasticache }}"
+            -c enableElastiCache="${{ inputs.enable_elasticache }}" \
+            -c ecsAmiName="${{ inputs.ecs_ami_name }}"
 
       - name: Force cleanup before destroy
         if: ${{ inputs.action == 'destroy' }}

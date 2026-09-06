@@ -112,7 +112,9 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   const autoScalingGroup = new AutoScalingGroup(scope, 'EcsCapacity', {
     vpc,
     instanceType: config.instanceType,
-    machineImage: EcsOptimizedImage.amazonLinux2023(ecsAmiHardwareType(config.instanceTypeName)),
+    machineImage: config.ecsAmiName
+        ? MachineImage.lookup({ name: config.ecsAmiName, owners: ['amazon'] })
+        : EcsOptimizedImage.amazonLinux2023(ecsAmiHardwareType(config.instanceTypeName)),
     role: instanceRole,
     securityGroup,
     userData,
