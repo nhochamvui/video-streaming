@@ -97,9 +97,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   userData.addCommands(
     'echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config',
     'echo \'ECS_AVAILABLE_LOGGING_DRIVERS=["json-file","awslogs"]\' >> /etc/ecs/ecs.config',
-    'echo \'{"min-api-version":"1.21"}\' > /etc/docker/daemon.json',
-    'systemctl restart docker',
-    'systemctl restart ecs',
+    'yum update -y ecs-init',
     'curl -sSL https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh',
     'sh /tmp/netdata-kickstart.sh --non-interactive --stable-channel --no-updates --disable-cloud',
     'usermod -aG docker netdata && systemctl restart netdata'
