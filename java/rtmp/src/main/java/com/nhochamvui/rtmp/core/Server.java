@@ -31,6 +31,7 @@ public class Server {
     private final int port;
     private final String hlsBucket;
     private final String hlsRegion;
+    private final String hlsCdnUrl;
 
     public Server(
             StreamSessionService streamSessionService,
@@ -39,7 +40,8 @@ public class Server {
             ServerIdentity serverIdentity,
             @Value("${rtmp.port:1935}") int port,
             @Value("${rtmp.hls.bucket:}") String hlsBucket,
-            @Value("${rtmp.hls.region:}") String hlsRegion
+            @Value("${rtmp.hls.region:}") String hlsRegion,
+            @Value("${rtmp.hls.cdn-url:}") String hlsCdnUrl
     ) {
         this.streamSessionService = streamSessionService;
         this.safePlaybackPath = safePlaybackPath;
@@ -48,6 +50,7 @@ public class Server {
         this.port = port;
         this.hlsBucket = hlsBucket;
         this.hlsRegion = hlsRegion;
+        this.hlsCdnUrl = hlsCdnUrl;
         log.info("RTMP Server initialized | serverId={} | port={} | hlsBucket={} | hlsRegion={}", this.serverId, port, hlsBucket, hlsRegion);
     }
 
@@ -60,7 +63,7 @@ public class Server {
                     Socket socket = serverSocket.accept();
                     Thread.ofVirtual().start(() -> {
                         try (socket) {
-                            new ClientSession(socket, Server.this, streamSessionService, safePlaybackPath, serverId, hlsBucket, hlsRegion).run();
+                            new ClientSession(socket, Server.this, streamSessionService, safePlaybackPath, serverId, hlsBucket, hlsRegion, hlsCdnUrl).run();
                         } catch (Exception e) {
                             log.error("ClientSession fatal error", e);
                         }

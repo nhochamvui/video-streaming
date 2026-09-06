@@ -47,6 +47,7 @@ public class ClientSession {
     private final String serverId;
     private final String hlsBucket;
     private final String hlsRegion;
+    private final String hlsCdnUrl;
     private final String connectionId;
     private final String connectionIp;
     private final long connectionStartTime;
@@ -84,7 +85,7 @@ public class ClientSession {
     private volatile String ffmpegSpeed;
     private volatile boolean streaming;
 
-    public ClientSession(Socket socket, Server server, StreamSessionService streamSessionService, SafePlaybackPath safePlaybackPath, String serverId, String hlsBucket, String hlsRegion) throws IOException {
+    public ClientSession(Socket socket, Server server, StreamSessionService streamSessionService, SafePlaybackPath safePlaybackPath, String serverId, String hlsBucket, String hlsRegion, String hlsCdnUrl) throws IOException {
         this.socket = socket;
         this.server = server;
         this.streamSessionService = streamSessionService;
@@ -92,6 +93,7 @@ public class ClientSession {
         this.serverId = serverId;
         this.hlsBucket = hlsBucket;
         this.hlsRegion = hlsRegion;
+        this.hlsCdnUrl = hlsCdnUrl;
         this.socket.setTcpNoDelay(true);
         this.socket.setSoTimeout(5000);
         this.connectionStartTime = System.currentTimeMillis();
@@ -146,6 +148,34 @@ public class ClientSession {
 
     public String getStreamName() {
         return streamName;
+    }
+
+    public long getAudioPackets() {
+        return audioPackets;
+    }
+
+    public long getVideoPackets() {
+        return videoPackets;
+    }
+
+    public long getAudioBytes() {
+        return audioBytes;
+    }
+
+    public long getVideoBytes() {
+        return videoBytes;
+    }
+
+    public long getDroppedPackets() {
+        return droppedPackets;
+    }
+
+    public long getKeyframeCount() {
+        return keyframeCount;
+    }
+
+    public long getBytesToFfmpeg() {
+        return bytesToFfmpeg;
     }
 
     private void handleHandShake() throws IOException {
@@ -930,6 +960,10 @@ public class ClientSession {
         stats.put("streamName", streamName != null ? streamName : "unknown");
         stats.put("connectionId", connectionId);
         stats.put("connectionIp", connectionIp);
+
+        String thumbBase = hlsCdnUrl != null && !hlsCdnUrl.isBlank()
+                ? hlsCdnUrl + "/hls/" : "/hls/";
+        stats.put("thumbnailUrl", thumbBase + streamName + "/thumbnail.jpg");
 
         if (streamStartWallTime > 0) {
             long elapsed = System.currentTimeMillis() - streamStartWallTime;

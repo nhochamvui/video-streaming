@@ -37,6 +37,12 @@ func (f *fakeUploader) PutPlaylistReliable(key, localPath string) {
 	f.PutPlaylist(key, localPath)
 }
 
+func (f *fakeUploader) PutThumbnail(key, localPath string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.puts[key] = localPath
+}
+
 func (f *fakeUploader) Delete(key string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

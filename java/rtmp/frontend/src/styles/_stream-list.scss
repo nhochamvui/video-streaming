@@ -8,3 +8,69 @@
     color: $color-text-faint;
   }
 }
+
+.stream-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+}
+
+.stream-card {
+  display: block;
+  background: $color-bg-raised;
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s;
+
+  &:hover {
+    border-color: $color-link;
+
+    .stream-card__thumb img {
+      filter: brightness(1.1);
+    }
+  }
+
+  &__thumb {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    background: $color-bg-sunken;
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: filter 0.15s;
+    }
+  }
+
+  &__placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: $color-text-faint;
+    font-size: 13px;
+    pointer-events: none;
+
+    img:not([style*="display: none"]) ~ & {
+      display: none;
+    }
+  }
+
+  &__label {
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: $font-mono;
+    color: $color-text-muted;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

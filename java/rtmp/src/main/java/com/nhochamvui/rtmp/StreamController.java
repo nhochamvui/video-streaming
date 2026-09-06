@@ -72,6 +72,13 @@ public class StreamController {
         result.put("status", names.isEmpty() ? "idle" : "streaming");
         result.put("activeStreams", names.size());
         result.put("streams", new ArrayList<>(names));
+        String thumbBase = hlsCdnUrl != null && !hlsCdnUrl.isBlank()
+                ? hlsCdnUrl + "/hls/" : "/hls/";
+        Map<String, String> thumbnails = new LinkedHashMap<>();
+        for (String name : names) {
+            thumbnails.put(name, thumbBase + name + "/thumbnail.jpg");
+        }
+        result.put("thumbnails", thumbnails);
         return result;
     }
 

@@ -5,7 +5,7 @@ import { loadActiveStreams } from '../../store/streamsSlice'
 
 export function ActiveStreamsList() {
   const dispatch = useAppDispatch()
-  const { names, namesStatus } = useAppSelector((state) => state.streams)
+  const { names, thumbnails, namesStatus } = useAppSelector((state) => state.streams)
 
   useEffect(() => {
     void dispatch(loadActiveStreams())
@@ -20,12 +20,25 @@ export function ActiveStreamsList() {
   }
 
   return (
-    <ul className="stream-list">
+    <div className="stream-grid">
       {names.map((name) => (
-        <li key={name}>
-          <Link to={`/${encodeURIComponent(name)}`}>{name}</Link>
-        </li>
+        <Link key={name} to={`/${encodeURIComponent(name)}`} className="stream-card">
+          <div className="stream-card__thumb">
+            {thumbnails[name] ? (
+              <img
+                src={thumbnails[name]}
+                alt={`Stream ${name}`}
+                loading="lazy"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none'
+                }}
+              />
+            ) : null}
+            <span className="stream-card__placeholder">No Preview</span>
+          </div>
+          <div className="stream-card__label">{name}</div>
+        </Link>
       ))}
-    </ul>
+    </div>
   )
 }

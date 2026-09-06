@@ -5,6 +5,7 @@ import type { StreamStats } from '../api/types'
 interface StreamsState {
   namesStatus: 'idle' | 'loading' | 'success' | 'error'
   names: string[]
+  thumbnails: Record<string, string>
   statsStatus: 'idle' | 'loading' | 'success' | 'error'
   stats: Record<string, StreamStats>
   lastUpdate: number
@@ -13,6 +14,7 @@ interface StreamsState {
 const initialState: StreamsState = {
   namesStatus: 'idle',
   names: [],
+  thumbnails: {},
   statsStatus: 'idle',
   stats: {},
   lastUpdate: 0,
@@ -20,7 +22,7 @@ const initialState: StreamsState = {
 
 export const loadActiveStreams = createAsyncThunk('streams/loadNames', async () => {
   const health = await fetchHealth()
-  return health.streams ?? []
+  return { names: health.streams ?? [], thumbnails: health.thumbnails ?? {} }
 })
 
 export const loadStats = createAsyncThunk('streams/loadStats', async () => {
@@ -39,7 +41,8 @@ const streamsSlice = createSlice({
       })
       .addCase(loadActiveStreams.fulfilled, (state, action) => {
         state.namesStatus = 'success'
-        state.names = action.payload
+        state.names = action.payload.names
+        state.thumbnails = action.payload.thumbnails
       })
       .addCase(loadActiveStreams.rejected, (state) => {
         state.namesStatus = 'error'

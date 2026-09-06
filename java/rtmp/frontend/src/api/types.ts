@@ -9,6 +9,7 @@ export interface HealthResponse {
   status: 'idle' | 'streaming'
   activeStreams: number
   streams: string[]
+  thumbnails?: Record<string, string>
 }
 
 export interface StreamStats {

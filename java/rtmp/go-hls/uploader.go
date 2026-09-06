@@ -42,6 +42,7 @@ type Uploader interface {
 	PutSegment(key, localPath string)
 	PutPlaylist(key, localPath string)
 	PutPlaylistReliable(key, localPath string)
+	PutThumbnail(key, localPath string)
 	Delete(key string)
 	DeleteAll(prefix string)
 }
@@ -115,6 +116,16 @@ func (u *s3Uploader) PutPlaylist(key, localPath string) {
 // reliable (blocking) as well, so this is an alias.
 func (u *s3Uploader) PutPlaylistReliable(key, localPath string) {
 	u.PutPlaylist(key, localPath)
+}
+
+func (u *s3Uploader) PutThumbnail(key, localPath string) {
+	u.enqueue(uploadTask{
+		kind:         putSegment,
+		key:          key,
+		localPath:    localPath,
+		contentType:  "image/jpeg",
+		cacheControl: "public,max-age=30",
+	})
 }
 
 func (u *s3Uploader) Delete(key string) {

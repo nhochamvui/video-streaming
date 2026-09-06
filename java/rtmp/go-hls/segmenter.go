@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -65,6 +66,8 @@ type Segmenter struct {
 
 	uploader        Uploader
 	lastMasterMtime int64
+
+	thumbnailCaptured bool
 
 	frames    int64
 	bytes     int64
@@ -253,6 +256,7 @@ func (s *Segmenter) addVideoSample(dts int64, cts int32, body []byte) error {
 		}
 		s.segmentStarted = true
 		s.pendingVideo = &sample{dts: dts, fmp4: &fmp4.Sample{Payload: body, PTSOffset: cts, IsNonSyncSample: !key}, key: true}
+		s.tryCaptureThumbnail(body)
 		return nil
 	}
 
@@ -501,6 +505,24 @@ func (s *Segmenter) emitPlaylist() {
 
 	s.uploadPlaylist("output.m3u8")
 	s.uploadMasterIfChanged()
+}
+
+// tryCaptureThumbnail decodes the first keyframe into a JPEG thumbnail.
+// Errors are logged but do not affect the stream.
+func (s *Segmenter) tryCaptureThumbnail(avccBody []byte) {
+	if s.thumbnailCaptured || s.videoCodec == nil {
+		return
+	}
+	s.thumbnailCaptured = true
+
+	if err := captureThumbnail(s.outDir, s.videoCodec.SPS, s.videoCodec.PPS, avccBody); err != nil {
+		log.Printf("thumbnail capture failed: %v", err)
+		return
+	}
+	if s.uploader != nil {
+		thumbPath := filepath.Join(filepath.Dir(s.outDir), "thumbnail.jpg")
+		s.uploader.PutThumbnail(s.s3Prefix()+"/thumbnail.jpg", thumbPath)
+	}
 }
 
 // Finish flushes trailing samples and appends ENDLIST.
