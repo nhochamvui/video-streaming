@@ -229,7 +229,7 @@ jobs:
             -c enableNlb="${{ inputs.enable_nlb }}" \
             -c enableElastiCache="${{ inputs.enable_elasticache }}"
 
-      - name: Stop ECS services before destroy
+      - name: Force cleanup before destroy
         if: ${{ inputs.action == 'destroy' }}
         run: |
           if [ "${{ inputs.deploy_mode }}" = "managed" ]; then
@@ -251,125 +251,160 @@ jobs:
               --output text 2>/dev/null | tr '\t' '\n'
           }
 
-          # The ECS cluster lives in the infra stack; services live in the app stack.
+          # Phase 1: Detach capacity providers from ECS cluster.
+          # This MUST happen first to break managed termination protection.
+          echo "=== Phase 1: Detaching capacity providers ==="
           CLUSTER=""
           if stack_exists "$INFRA_STACK"; then
             CLUSTER=$(list_resources "$INFRA_STACK" "AWS::ECS::Cluster" | grep -v '^None$' | grep -v '^$' | head -n 1 || true)
           fi
-          if [ -z "$CLUSTER" ]; then
-            echo "No ECS cluster found in $INFRA_STACK; skipping ECS service drain."
-          else
+          if [ -n "$CLUSTER" ]; then
             echo "Found ECS cluster $CLUSTER."
+            aws ecs put-cluster-capacity-providers \
+              --cli-input-json "{\"cluster\":\"$CLUSTER\",\"capacityProviders\":[],\"defaultCapacityProviderStrategy\":[]}" \
+              >/dev/null 2>&1 || echo "Could not detach capacity providers; they may already be detached."
+          else
+            echo "No ECS cluster found; skipping."
+          fi
 
+          # Phase 2: Force-delete all ECS services (bypasses scale-to-0 deadlock).
+          echo "=== Phase 2: Force-deleting ECS services ==="
+          DELETED_SERVICES=()
+          if [ -n "$CLUSTER" ]; then
             mapfile -t SERVICES < <(
               {
                 if stack_exists "$APP_STACK"; then list_resources "$APP_STACK" "AWS::ECS::Service"; fi
                 if stack_exists "$INFRA_STACK"; then list_resources "$INFRA_STACK" "AWS::ECS::Service"; fi
               } | grep -v '^None$' | grep -v '^$'
             )
-
             for SERVICE in "${SERVICES[@]}"; do
-              echo "Removing autoscaling target for ECS service $SERVICE."
-              aws application-autoscaling delete-scalable-target \
-                --service-namespace ecs \
-                --resource-id "service/${CLUSTER}/${SERVICE}" \
-                --scalable-dimension "ecs:service:DesiredCount" \
-                >/dev/null 2>&1 || echo "No autoscaling target for $SERVICE (or already removed)."
-            done
-
-            ACTIVE_SERVICES=()
-            for SERVICE in "${SERVICES[@]}"; do
-              echo "Scaling ECS service $SERVICE to 0."
-              if aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --desired-count 0 >/dev/null 2>&1; then
-                ACTIVE_SERVICES+=("$SERVICE")
-              else
-                echo "Could not scale $SERVICE; it may already be deleting."
-              fi
-            done
-
-            if [ "${#ACTIVE_SERVICES[@]}" -gt 0 ]; then
-              aws ecs wait services-stable --cluster "$CLUSTER" --services "${ACTIVE_SERVICES[@]}"
-            fi
-
-            mapfile -t TASKS < <(
-              {
-                aws ecs list-tasks --cluster "$CLUSTER" --desired-status RUNNING --query "taskArns" --output text
-                aws ecs list-tasks --cluster "$CLUSTER" --desired-status PENDING --query "taskArns" --output text
-              } | tr '\t' '\n'
-            )
-
-            ACTIVE_TASKS=()
-            for TASK in "${TASKS[@]}"; do
-              if [ -z "$TASK" ] || [ "$TASK" = "None" ]; then
-                continue
-              fi
-              echo "Stopping ECS task $TASK."
-              if aws ecs stop-task --cluster "$CLUSTER" --task "$TASK" --reason "GitHub Actions destroy cleanup" >/dev/null 2>&1; then
-                ACTIVE_TASKS+=("$TASK")
-              else
-                echo "Could not stop $TASK; it may already be stopping."
-              fi
-            done
-
-            if [ "${#ACTIVE_TASKS[@]}" -gt 0 ]; then
-              aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "${ACTIVE_TASKS[@]}"
-            fi
-
-            DELETED_SERVICES=()
-            for SERVICE in "${SERVICES[@]}"; do
-              echo "Deleting ECS service $SERVICE before stack destroy."
+              echo "Force-deleting service $SERVICE."
               if aws ecs delete-service --cluster "$CLUSTER" --service "$SERVICE" --force >/dev/null 2>&1; then
                 DELETED_SERVICES+=("$SERVICE")
               else
                 echo "Could not delete $SERVICE; it may already be deleting."
               fi
             done
-
-            if [ "${#DELETED_SERVICES[@]}" -gt 0 ]; then
-              aws ecs wait services-inactive --cluster "$CLUSTER" --services "${DELETED_SERVICES[@]}"
-            fi
-
-            echo "Detaching ECS cluster capacity providers before stack destroy."
-            aws ecs put-cluster-capacity-providers \
-              --cli-input-json "{\"cluster\":\"$CLUSTER\",\"capacityProviders\":[],\"defaultCapacityProviderStrategy\":[]}" \
-              >/dev/null 2>&1 || echo "Could not detach capacity providers; they may already be detached or the cluster may be deleting."
           fi
 
-          if stack_exists "$INFRA_STACK"; then
-            mapfile -t AUTO_SCALING_GROUPS < <(
-              list_resources "$INFRA_STACK" "AWS::AutoScaling::AutoScalingGroup" | grep -v '^None$' | grep -v '^$'
+          # Phase 3: Stop remaining ECS tasks with a timeout.
+          echo "=== Phase 3: Stopping ECS tasks ==="
+          if [ -n "$CLUSTER" ]; then
+            mapfile -t TASKS < <(
+              {
+                aws ecs list-tasks --cluster "$CLUSTER" --desired-status RUNNING --query "taskArns" --output text 2>/dev/null
+                aws ecs list-tasks --cluster "$CLUSTER" --desired-status PENDING --query "taskArns" --output text 2>/dev/null
+              } | tr '\t' '\n'
             )
-
-            for AUTO_SCALING_GROUP in "${AUTO_SCALING_GROUPS[@]}"; do
-              echo "Cleaning up Auto Scaling group $AUTO_SCALING_GROUP."
-
-              mapfile -t INSTANCE_IDS < <(
-                aws autoscaling describe-auto-scaling-groups \
-                  --auto-scaling-group-names "$AUTO_SCALING_GROUP" \
-                  --query "AutoScalingGroups[0].Instances[].InstanceId" \
-                  --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | grep -v '^$'
-              )
-
-              if [ "${#INSTANCE_IDS[@]}" -gt 0 ]; then
-                echo "Removing scale-in protection for ${#INSTANCE_IDS[@]} instance(s)."
-                aws autoscaling set-instance-protection \
-                  --instance-ids "${INSTANCE_IDS[@]}" \
-                  --auto-scaling-group-name "$AUTO_SCALING_GROUP" \
-                  --no-protected-from-scale-in >/dev/null 2>&1 || true
-              fi
-              aws autoscaling update-auto-scaling-group \
-                --auto-scaling-group-name "$AUTO_SCALING_GROUP" \
-                --min-size 0 \
-                --desired-capacity 0 \
-                --new-instances-protected-from-scale-in false >/dev/null 2>&1 || true
-
-              if [ "${#INSTANCE_IDS[@]}" -gt 0 ]; then
-                echo "Terminating ${#INSTANCE_IDS[@]} instance(s)."
-                aws ec2 terminate-instances --instance-ids "${INSTANCE_IDS[@]}" >/dev/null 2>&1 || true
-                aws ec2 wait instance-terminated --instance-ids "${INSTANCE_IDS[@]}"
+            ACTIVE_TASKS=()
+            for TASK in "${TASKS[@]}"; do
+              if [ -z "$TASK" ] || [ "$TASK" = "None" ]; then continue; fi
+              echo "Stopping task $TASK."
+              if aws ecs stop-task --cluster "$CLUSTER" --task "$TASK" --reason "Force cleanup" >/dev/null 2>&1; then
+                ACTIVE_TASKS+=("$TASK")
               fi
             done
+            if [ ${#ACTIVE_TASKS[@]} -gt 0 ]; then
+              echo "Waiting up to 120s for ${#ACTIVE_TASKS[@]} task(s) to stop..."
+              SECONDS=0
+              while (( SECONDS < 120 )); do
+                REMAINING=$(aws ecs list-tasks --cluster "$CLUSTER" --desired-status RUNNING --query "taskArns" --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | grep -v '^$' | wc -l)
+                if [ "$REMAINING" -eq 0 ]; then echo "All tasks stopped."; break; fi
+                sleep 5
+              done
+              if (( SECONDS >= 120 )); then echo "WARNING: Timed out waiting for tasks to stop."; fi
+            fi
           fi
+
+          # Phase 4: Terminate ALL instances in the VPC (ASG + proxy + any others).
+          # Direct EC2 terminate-instances bypasses ASG managed termination protection.
+          echo "=== Phase 4: Terminating all instances ==="
+          VPC_ID=""
+          if stack_exists "$INFRA_STACK"; then
+            VPC_ID=$(list_resources "$INFRA_STACK" "AWS::EC2::VPC" | grep -v '^None$' | grep -v '^$' | head -n 1 || true)
+          fi
+          if [ -n "$VPC_ID" ]; then
+            echo "Found VPC $VPC_ID."
+            mapfile -t INSTANCE_IDS < <(
+              aws ec2 describe-instances \
+                --filters "Name=vpc-id,Values=$VPC_ID" "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+                --query 'Reservations[].Instances[].InstanceId' \
+                --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | grep -v '^$'
+            )
+            if [ ${#INSTANCE_IDS[@]} -gt 0 ]; then
+              echo "Terminating ${#INSTANCE_IDS[@]} instance(s): ${INSTANCE_IDS[*]}"
+              aws ec2 terminate-instances --instance-ids "${INSTANCE_IDS[@]}" >/dev/null 2>&1 || true
+              echo "Waiting up to 300s for instances to terminate..."
+              SECONDS=0
+              while (( SECONDS < 300 )); do
+                REMAINING=$(aws ec2 describe-instances \
+                  --instance-ids "${INSTANCE_IDS[@]}" \
+                  --query 'Reservations[].Instances[].State.Name' \
+                  --output text 2>/dev/null | tr '\t' '\n' | grep -c -v 'terminated' || echo "0")
+                if [ "$REMAINING" -eq 0 ]; then echo "All instances terminated."; break; fi
+                sleep 10
+              done
+              if (( SECONDS >= 300 )); then echo "WARNING: Timed out waiting for instance termination."; fi
+            else
+              echo "No instances found in VPC."
+            fi
+          else
+            echo "Could not resolve VPC ID; skipping instance termination."
+          fi
+
+          # Phase 5: Force-detach and delete all ENIs in the VPC.
+          # ECS HOST-mode tasks and lingering ENIs block VPC deletion.
+          echo "=== Phase 5: Cleaning up ENIs ==="
+          if [ -n "$VPC_ID" ]; then
+            mapfile -t ENI_IDS < <(
+              aws ec2 describe-network-interfaces \
+                --filters "Name=vpc-id,Values=$VPC_ID" \
+                --query 'NetworkInterfaces[].NetworkInterfaceId' \
+                --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | grep -v '^$'
+            )
+            for ENI in "${ENI_IDS[@]}"; do
+              echo "Processing ENI $ENI."
+              ATTACHMENT_ID=$(aws ec2 describe-network-interfaces \
+                --network-interface-ids "$ENI" \
+                --query 'NetworkInterfaces[0].Attachment.AttachmentId' \
+                --output text 2>/dev/null || true)
+              if [ -n "$ATTACHMENT_ID" ] && [ "$ATTACHMENT_ID" != "None" ]; then
+                echo "  Force-detaching $ATTACHMENT_ID."
+                aws ec2 detach-network-interface --attachment-id "$ATTACHMENT_ID" --force >/dev/null 2>&1 || true
+                sleep 3
+              fi
+              aws ec2 delete-network-interface --network-interface-id "$ENI" >/dev/null 2>&1 || echo "  Could not delete $ENI yet."
+            done
+            # Retry once for ENIs that needed time to detach
+            sleep 5
+            mapfile -t ENI_IDS < <(
+              aws ec2 describe-network-interfaces \
+                --filters "Name=vpc-id,Values=$VPC_ID" \
+                --query 'NetworkInterfaces[].NetworkInterfaceId' \
+                --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | grep -v '^$'
+            )
+            for ENI in "${ENI_IDS[@]}"; do
+              echo "Retrying delete for ENI $ENI."
+              aws ec2 delete-network-interface --network-interface-id "$ENI" >/dev/null 2>&1 || echo "  Could not delete $ENI (may need manual cleanup)."
+            done
+          fi
+
+          # Phase 6: Detach Internet Gateway so VPCGatewayAttachment can be deleted.
+          echo "=== Phase 6: Detaching Internet Gateway ==="
+          if [ -n "$VPC_ID" ]; then
+            IGW_ID=$(aws ec2 describe-internet-gateways \
+              --filters "Name=attachment.vpc-id,Values=$VPC_ID" \
+              --query 'InternetGateways[0].InternetGatewayId' \
+              --output text 2>/dev/null || true)
+            if [ -n "$IGW_ID" ] && [ "$IGW_ID" != "None" ]; then
+              echo "Detaching IGW $IGW_ID from VPC $VPC_ID."
+              aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" >/dev/null 2>&1 || echo "Could not detach IGW."
+            else
+              echo "No IGW attached to VPC."
+            fi
+          fi
+
+          echo "=== Force cleanup complete ==="
 
       - name: CDK destroy
         if: ${{ inputs.action == 'destroy' }}
