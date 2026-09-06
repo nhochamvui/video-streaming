@@ -92,10 +92,11 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   securityGroup.addIngressRule(Peer.ipv4(config.netdataCidr), Port.tcp(19999), 'Netdata dashboard from admin CIDR');
   proxySecurityGroup.addIngressRule(securityGroup, Port.tcp(6379), 'Redis from ECS app instances');
 
-  const cluster = new Cluster(scope, 'Cluster', { vpc });
+  const cluster = new Cluster(scope, 'Cluster', { vpc, clusterName: 'rtmp-cheap' });
   const userData = UserData.forLinux();
   userData.addCommands(
     'echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config',
+    'echo ECS_CLUSTER=rtmp-cheap >> /etc/ecs/ecs.config',
     'echo \'ECS_AVAILABLE_LOGGING_DRIVERS=["json-file","awslogs"]\' >> /etc/ecs/ecs.config',
     'yum update -y ecs-init',
     'curl -sSL https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh',
