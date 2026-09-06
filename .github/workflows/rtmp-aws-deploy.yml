@@ -340,7 +340,7 @@ jobs:
                 REMAINING=$(aws ec2 describe-instances \
                   --instance-ids "${INSTANCE_IDS[@]}" \
                   --query 'Reservations[].Instances[].State.Name' \
-                  --output text 2>/dev/null | tr '\t' '\n' | grep -c -v 'terminated' || echo "0")
+                  --output text 2>/dev/null | tr '\t' '\n' | grep -c -v 'terminated' || true)
                 if [ "$REMAINING" -eq 0 ]; then echo "All instances terminated."; break; fi
                 sleep 10
               done
@@ -350,6 +350,18 @@ jobs:
             fi
           else
             echo "Could not resolve VPC ID; skipping instance termination."
+          fi
+
+          # Allow AWS to fully release ENIs after instance termination.
+          if [ -n "$VPC_ID" ]; then
+            REMAINING_INSTANCES=$(aws ec2 describe-instances \
+              --filters "Name=vpc-id,Values=$VPC_ID" "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+              --query 'Reservations[].Instances[].InstanceId' \
+              --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | grep -v '^$' | wc -l)
+            if [ "$REMAINING_INSTANCES" -gt 0 ]; then
+              echo "Waiting for $REMAINING_INSTANCES instance(s) to fully terminate before ENI cleanup..."
+              sleep 15
+            fi
           fi
 
           # Phase 5: Force-detach and delete all ENIs in the VPC.
@@ -371,22 +383,30 @@ jobs:
               if [ -n "$ATTACHMENT_ID" ] && [ "$ATTACHMENT_ID" != "None" ]; then
                 echo "  Force-detaching $ATTACHMENT_ID."
                 aws ec2 detach-network-interface --attachment-id "$ATTACHMENT_ID" --force >/dev/null 2>&1 || true
-                sleep 3
+                sleep 5
               fi
               aws ec2 delete-network-interface --network-interface-id "$ENI" >/dev/null 2>&1 || echo "  Could not delete $ENI yet."
             done
-            # Retry once for ENIs that needed time to detach
-            sleep 5
-            mapfile -t ENI_IDS < <(
-              aws ec2 describe-network-interfaces \
-                --filters "Name=vpc-id,Values=$VPC_ID" \
-                --query 'NetworkInterfaces[].NetworkInterfaceId' \
-                --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | grep -v '^$'
-            )
-            for ENI in "${ENI_IDS[@]}"; do
-              echo "Retrying delete for ENI $ENI."
-              aws ec2 delete-network-interface --network-interface-id "$ENI" >/dev/null 2>&1 || echo "  Could not delete $ENI (may need manual cleanup)."
+            # Retry with increasing backoff for ENIs that needed time to detach
+            RETRY_DELAY=10
+            for RETRY in 1 2 3; do
+              sleep "$RETRY_DELAY"
+              mapfile -t ENI_IDS < <(
+                aws ec2 describe-network-interfaces \
+                  --filters "Name=vpc-id,Values=$VPC_ID" \
+                  --query 'NetworkInterfaces[].NetworkInterfaceId' \
+                  --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | grep -v '^$'
+              )
+              if [ ${#ENI_IDS[@]} -eq 0 ]; then break; fi
+              for ENI in "${ENI_IDS[@]}"; do
+                echo "Retry $RETRY: deleting ENI $ENI."
+                aws ec2 delete-network-interface --network-interface-id "$ENI" >/dev/null 2>&1 || echo "  Could not delete $ENI yet."
+              done
+              RETRY_DELAY=$(( RETRY_DELAY + 10 ))
             done
+            if [ ${#ENI_IDS[@]} -gt 0 ]; then
+              echo "WARNING: Some ENIs could not be deleted and may need manual cleanup."
+            fi
           fi
 
           # Phase 6: Detach Internet Gateway so VPCGatewayAttachment can be deleted.
@@ -398,7 +418,11 @@ jobs:
               --output text 2>/dev/null || true)
             if [ -n "$IGW_ID" ] && [ "$IGW_ID" != "None" ]; then
               echo "Detaching IGW $IGW_ID from VPC $VPC_ID."
-              aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" >/dev/null 2>&1 || echo "Could not detach IGW."
+              if ! aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" >/dev/null 2>&1; then
+                echo "  IGW detach failed; retrying in 10s..."
+                sleep 10
+                aws ec2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" >/dev/null 2>&1 || echo "  Could not detach IGW (may need manual cleanup)."
+              fi
             else
               echo "No IGW attached to VPC."
             fi
