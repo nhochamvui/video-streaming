@@ -313,8 +313,8 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
   });
   const appContainer = taskDefinition.addContainer('rtmp-app', {
     image: ContainerImage.fromRegistry(config.appImage),
-    memoryReservationMiB: 384,
-    memoryLimitMiB: 640,
+    memoryReservationMiB: 512,
+    memoryLimitMiB: 768,
     secrets: {
       RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter),
       RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter),

@@ -1,7 +1,6 @@
 package com.nhochamvui.rtmp.session;
 
 import io.lettuce.core.ScriptOutputType;
-import io.lettuce.core.api.sync.RedisCommands;
 import jakarta.inject.Singleton;
 
 import java.util.HashMap;
@@ -12,6 +11,17 @@ import java.util.Optional;
 @Singleton
 public class LettuceStreamSessionRepository implements StreamSessionRepository {
     private static final String KEY_PREFIX = "publish-session:";
+    private static final String COUNT_SCRIPT = """
+            local keys = redis.call('KEYS', KEYS[1])
+            local count = 0
+            for _, key in ipairs(keys) do
+              if redis.call('HGET', key, 'requestedIp') == ARGV[1]
+                 and redis.call('HGET', key, 'status') == ARGV[2] then
+                count = count + 1
+              end
+            end
+            return count
+            """;
     private static final String VALIDATE_SCRIPT = """
             local key = KEYS[1]
             local serverId = ARGV[1]
@@ -84,7 +94,6 @@ public class LettuceStreamSessionRepository implements StreamSessionRepository {
 
     @Override
     public void createPending(StreamSession session, int ttlSeconds) {
-        RedisCommands<String, String> redis = redisProvider.commands();
         String key = key(session.lookupKey());
         Map<String, String> values = new HashMap<>();
         values.put("playbackId", session.playbackId());
@@ -99,40 +108,38 @@ public class LettuceStreamSessionRepository implements StreamSessionRepository {
         values.put("createdAt", Long.toString(session.createdAt()));
         values.put("lastValidatedAt", Long.toString(session.lastValidatedAt()));
         values.put("lastHeartbeatAt", Long.toString(session.lastHeartbeatAt()));
-        redis.hset(key, values);
-        redis.expire(key, ttlSeconds);
+        redisProvider.withCommands(redis -> {
+            redis.hset(key, values);
+            redis.expire(key, ttlSeconds);
+            return null;
+        });
     }
 
     @Override
     public Optional<StreamSession> validatePublish(String lookupKey, String serverId, String connectionId, String publisherIp, int ttlSeconds) {
-        List<String> values = redisProvider.commands().eval(VALIDATE_SCRIPT, ScriptOutputType.MULTI, new String[]{key(lookupKey)},
-                serverId, connectionId, nullToEmpty(publisherIp), Long.toString(System.currentTimeMillis()), Integer.toString(ttlSeconds));
+        List<String> values = redisProvider.withCommands(redis -> redis.eval(VALIDATE_SCRIPT, ScriptOutputType.MULTI, new String[]{key(lookupKey)},
+                serverId, connectionId, nullToEmpty(publisherIp), Long.toString(System.currentTimeMillis()), Integer.toString(ttlSeconds)));
         return toSession(lookupKey, values);
     }
 
     @Override
     public boolean heartbeat(String lookupKey, String serverId, String connectionId, int ttlSeconds) {
-        Long result = redisProvider.commands().eval(HEARTBEAT_SCRIPT, ScriptOutputType.INTEGER, new String[]{key(lookupKey)},
-                serverId, connectionId, Long.toString(System.currentTimeMillis()), Integer.toString(ttlSeconds));
+        Long result = redisProvider.withCommands(redis -> redis.eval(HEARTBEAT_SCRIPT, ScriptOutputType.INTEGER, new String[]{key(lookupKey)},
+                serverId, connectionId, Long.toString(System.currentTimeMillis()), Integer.toString(ttlSeconds)));
         return result != null && result == 1L;
     }
 
     @Override
     public void disconnect(String lookupKey, String serverId, String connectionId, int ttlSeconds) {
-        redisProvider.commands().eval(DISCONNECT_SCRIPT, ScriptOutputType.INTEGER, new String[]{key(lookupKey)},
-                serverId, connectionId, Long.toString(System.currentTimeMillis()), Integer.toString(ttlSeconds));
+        redisProvider.withCommands(redis -> redis.eval(DISCONNECT_SCRIPT, ScriptOutputType.INTEGER, new String[]{key(lookupKey)},
+                serverId, connectionId, Long.toString(System.currentTimeMillis()), Integer.toString(ttlSeconds)));
     }
 
     @Override
     public long countByRequestedIpAndStatus(String requestedIp, StreamSessionStatus status) {
-        long count = 0;
-        for (String key : redisProvider.commands().keys(KEY_PREFIX + "*")) {
-            Map<String, String> values = redisProvider.commands().hgetall(key);
-            if (requestedIp.equals(values.get("requestedIp")) && status.name().equals(values.get("status"))) {
-                count++;
-            }
-        }
-        return count;
+        Long count = redisProvider.withCommands(redis -> redis.eval(COUNT_SCRIPT, ScriptOutputType.INTEGER,
+                new String[]{KEY_PREFIX + "*"}, nullToEmpty(requestedIp), status.name()));
+        return count == null ? 0 : count;
     }
 
     private Optional<StreamSession> toSession(String lookupKey, List<String> values) {

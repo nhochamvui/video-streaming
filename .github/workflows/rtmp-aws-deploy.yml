@@ -240,37 +240,47 @@ jobs:
             INFRA_STACK="RtmpCheapDemoInfraStack"
           fi
 
-          for STACK_NAME in "$APP_STACK" "$INFRA_STACK"; do
-            if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
-              echo "Stack $STACK_NAME does not exist; skipping ECS service drain."
-              continue
-            fi
+          stack_exists() {
+            aws cloudformation describe-stacks --stack-name "$1" >/dev/null 2>&1
+          }
 
-            CLUSTER=$(
-              aws cloudformation describe-stack-resources \
-                --stack-name "$STACK_NAME" \
-                --query "StackResources[?ResourceType=='AWS::ECS::Cluster'].PhysicalResourceId | [0]" \
-                --output text
-            )
-            if [ -z "$CLUSTER" ] || [ "$CLUSTER" = "None" ]; then
-              echo "No ECS cluster found in $STACK_NAME; skipping ECS service drain."
-              continue
-            fi
+          list_resources() {
+            aws cloudformation describe-stack-resources \
+              --stack-name "$1" \
+              --query "StackResources[?ResourceType=='$2'].PhysicalResourceId" \
+              --output text 2>/dev/null | tr '\t' '\n'
+          }
+
+          # The ECS cluster lives in the infra stack; services live in the app stack.
+          CLUSTER=""
+          if stack_exists "$INFRA_STACK"; then
+            CLUSTER=$(list_resources "$INFRA_STACK" "AWS::ECS::Cluster" | grep -v '^None$' | grep -v '^$' | head -n 1 || true)
+          fi
+          if [ -z "$CLUSTER" ]; then
+            echo "No ECS cluster found in $INFRA_STACK; skipping ECS service drain."
+          else
+            echo "Found ECS cluster $CLUSTER."
 
             mapfile -t SERVICES < <(
-              aws cloudformation describe-stack-resources \
-                --stack-name "$STACK_NAME" \
-                --query "StackResources[?ResourceType=='AWS::ECS::Service'].PhysicalResourceId" \
-                --output text | tr '\t' '\n'
+              {
+                if stack_exists "$APP_STACK"; then list_resources "$APP_STACK" "AWS::ECS::Service"; fi
+                if stack_exists "$INFRA_STACK"; then list_resources "$INFRA_STACK" "AWS::ECS::Service"; fi
+              } | grep -v '^None$' | grep -v '^$'
             )
+
+            for SERVICE in "${SERVICES[@]}"; do
+              echo "Removing autoscaling target for ECS service $SERVICE."
+              aws application-autoscaling delete-scalable-target \
+                --service-namespace ecs \
+                --resource-id "service/${CLUSTER}/${SERVICE}" \
+                --scalable-dimension "ecs:service:DesiredCount" \
+                >/dev/null 2>&1 || echo "No autoscaling target for $SERVICE (or already removed)."
+            done
 
             ACTIVE_SERVICES=()
             for SERVICE in "${SERVICES[@]}"; do
-              if [ -z "$SERVICE" ] || [ "$SERVICE" = "None" ]; then
-                continue
-              fi
               echo "Scaling ECS service $SERVICE to 0."
-              if aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --desired-count 0 >/dev/null; then
+              if aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --desired-count 0 >/dev/null 2>&1; then
                 ACTIVE_SERVICES+=("$SERVICE")
               else
                 echo "Could not scale $SERVICE; it may already be deleting."
@@ -294,7 +304,7 @@ jobs:
                 continue
               fi
               echo "Stopping ECS task $TASK."
-              if aws ecs stop-task --cluster "$CLUSTER" --task "$TASK" --reason "GitHub Actions destroy cleanup" >/dev/null; then
+              if aws ecs stop-task --cluster "$CLUSTER" --task "$TASK" --reason "GitHub Actions destroy cleanup" >/dev/null 2>&1; then
                 ACTIVE_TASKS+=("$TASK")
               else
                 echo "Could not stop $TASK; it may already be stopping."
@@ -306,9 +316,9 @@ jobs:
             fi
 
             DELETED_SERVICES=()
-            for SERVICE in "${ACTIVE_SERVICES[@]}"; do
+            for SERVICE in "${SERVICES[@]}"; do
               echo "Deleting ECS service $SERVICE before stack destroy."
-              if aws ecs delete-service --cluster "$CLUSTER" --service "$SERVICE" --force >/dev/null; then
+              if aws ecs delete-service --cluster "$CLUSTER" --service "$SERVICE" --force >/dev/null 2>&1; then
                 DELETED_SERVICES+=("$SERVICE")
               else
                 echo "Could not delete $SERVICE; it may already be deleting."
@@ -322,44 +332,44 @@ jobs:
             echo "Detaching ECS cluster capacity providers before stack destroy."
             aws ecs put-cluster-capacity-providers \
               --cli-input-json "{\"cluster\":\"$CLUSTER\",\"capacityProviders\":[],\"defaultCapacityProviderStrategy\":[]}" \
-              >/dev/null || echo "Could not detach capacity providers; they may already be detached or the cluster may be deleting."
+              >/dev/null 2>&1 || echo "Could not detach capacity providers; they may already be detached or the cluster may be deleting."
+          fi
 
+          if stack_exists "$INFRA_STACK"; then
             mapfile -t AUTO_SCALING_GROUPS < <(
-              aws cloudformation describe-stack-resources \
-                --stack-name "$STACK_NAME" \
-                --query "StackResources[?ResourceType=='AWS::AutoScaling::AutoScalingGroup'].PhysicalResourceId" \
-                --output text | tr '\t' '\n'
+              list_resources "$INFRA_STACK" "AWS::AutoScaling::AutoScalingGroup" | grep -v '^None$' | grep -v '^$'
             )
 
             for AUTO_SCALING_GROUP in "${AUTO_SCALING_GROUPS[@]}"; do
-              if [ -z "$AUTO_SCALING_GROUP" ] || [ "$AUTO_SCALING_GROUP" = "None" ]; then
-                continue
-              fi
-              echo "Scaling Auto Scaling group $AUTO_SCALING_GROUP to 0."
-              aws autoscaling update-auto-scaling-group \
-                --auto-scaling-group-name "$AUTO_SCALING_GROUP" \
-                --min-size 0 \
-                --desired-capacity 0
+              echo "Cleaning up Auto Scaling group $AUTO_SCALING_GROUP."
 
               mapfile -t INSTANCE_IDS < <(
                 aws autoscaling describe-auto-scaling-groups \
                   --auto-scaling-group-names "$AUTO_SCALING_GROUP" \
                   --query "AutoScalingGroups[0].Instances[].InstanceId" \
-                  --output text | tr '\t' '\n'
+                  --output text 2>/dev/null | tr '\t' '\n' | grep -v '^None$' | grep -v '^$'
               )
 
-              ACTIVE_INSTANCE_IDS=()
-              for INSTANCE_ID in "${INSTANCE_IDS[@]}"; do
-                if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "None" ]; then
-                  ACTIVE_INSTANCE_IDS+=("$INSTANCE_ID")
-                fi
-              done
+              if [ "${#INSTANCE_IDS[@]}" -gt 0 ]; then
+                echo "Removing scale-in protection for ${#INSTANCE_IDS[@]} instance(s)."
+                aws autoscaling set-instance-protection \
+                  --instance-ids "${INSTANCE_IDS[@]}" \
+                  --auto-scaling-group-name "$AUTO_SCALING_GROUP" \
+                  --no-protected-from-scale-in >/dev/null 2>&1 || true
+              fi
+              aws autoscaling update-auto-scaling-group \
+                --auto-scaling-group-name "$AUTO_SCALING_GROUP" \
+                --min-size 0 \
+                --desired-capacity 0 \
+                --new-instances-protected-from-scale-in false >/dev/null 2>&1 || true
 
-              if [ "${#ACTIVE_INSTANCE_IDS[@]}" -gt 0 ]; then
-                aws ec2 wait instance-terminated --instance-ids "${ACTIVE_INSTANCE_IDS[@]}"
+              if [ "${#INSTANCE_IDS[@]}" -gt 0 ]; then
+                echo "Terminating ${#INSTANCE_IDS[@]} instance(s)."
+                aws ec2 terminate-instances --instance-ids "${INSTANCE_IDS[@]}" >/dev/null 2>&1 || true
+                aws ec2 wait instance-terminated --instance-ids "${INSTANCE_IDS[@]}"
               fi
             done
-          done
+          fi
 
       - name: CDK destroy
         if: ${{ inputs.action == 'destroy' }}
