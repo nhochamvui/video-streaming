@@ -176,6 +176,8 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
 
   const proxyUserData = UserData.forLinux();
   proxyUserData.addCommands(
+    'fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile',
+    'echo \'/swapfile none swap sw 0 0\' >> /etc/fstab',
     'dnf install -y docker awscli jq',
     'curl -fsSL https://artifacts.grafana.com/gpg.key | gpg --dearmor -o /etc/pki/rpm-gpg/RPM-GPG-KEY-grafana',
     'cat > /etc/yum.repos.d/grafana.repo <<\'REPO\'',
@@ -204,6 +206,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     'cat > /etc/alloy/config.alloy <<\'EOF\'',
     'logging {}',
     'EOF',
+    'chmod 644 /etc/alloy/config.alloy',
     'systemctl enable --now alloy',
 
     'cat > /usr/local/bin/render-alloy-env <<\'EOF\'',
@@ -242,15 +245,15 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     '  FIRST=1',
     '  for ip in $PRIVATE_IPS; do',
     '    if [ "$FIRST" -eq 1 ]; then',
-    '      printf \'      { \\"__address__\\" = \\"%s:8888\\", \\"job\\" = \\"rtmp-server\\" }\\n\' "$ip" >> "$TMP"',
+    '      printf \'      { \\"__address__\\" = \\"%s:8888\\", \\"job\\" = \\"rtmp-server\\" },\\n\' "$ip" >> "$TMP"',
     '      FIRST=0',
     '    else',
-    '      printf \'    , { \\"__address__\\" = \\"%s:8888\\", \\"job\\" = \\"rtmp-server\\" }\\n\' "$ip" >> "$TMP"',
+    '      printf \'    , { \\"__address__\\" = \\"%s:8888\\", \\"job\\" = \\"rtmp-server\\" },\\n\' "$ip" >> "$TMP"',
     '    fi',
     '  done',
     '  printf \'  ]\\n  forward_to = [prometheus.remote_write.cloud.receiver]\\n}\\n\\nprometheus.remote_write \\"cloud\\" {\\n  endpoint {\\n    url             = \\"%s\\"\\n    send_exemplars  = true\\n    basic_auth {\\n      username = \\"%s\\"\\n      password = \\"%s\\"\\n    }\\n  }\\n}\\n\' "$GRAFANA_PROM_URL" "$GRAFANA_PROM_USER" "$GRAFANA_PROM_TOKEN" >> "$TMP"',
     'fi',
-    'if ! cmp -s "$TMP" "$CFG"; then mv "$TMP" "$CFG"; systemctl restart alloy; else rm "$TMP"; fi',
+    'if ! cmp -s "$TMP" "$CFG"; then mv "$TMP" "$CFG"; chmod 644 "$CFG"; systemctl restart alloy; else rm "$TMP"; fi',
     'EOF',
     'chmod +x /usr/local/bin/render-alloy-config',
 
