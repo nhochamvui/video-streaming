@@ -71,6 +71,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     natGateways: 0,
     subnetConfiguration: [{ name: 'public', subnetType: SubnetType.PUBLIC }]
   });
+  vpc.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
 
   const proxySecurityGroup = new SecurityGroup(scope, 'ProxySecurityGroup', {
     vpc,
@@ -120,7 +121,8 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     userData,
     minCapacity: ecsInstanceCount,
     maxCapacity: Math.max(config.maxAppCount, ecsInstanceCount),
-    vpcSubnets: { subnetType: SubnetType.PUBLIC }
+    vpcSubnets: { subnetType: SubnetType.PUBLIC },
+    autoScalingGroupName: 'rtmp-ecs-asg'
   });
 
   const capacityProvider = new AsgCapacityProvider(scope, 'CapacityProvider', {
@@ -237,7 +239,8 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     role: proxyRole,
     securityGroup: proxySecurityGroup,
     userData: proxyUserData,
-    vpcSubnets: { subnetType: SubnetType.PUBLIC }
+    vpcSubnets: { subnetType: SubnetType.PUBLIC },
+    instanceName: 'rtmp-proxy'
   });
 
   const proxyElasticIp = new CfnEIP(scope, 'ProxyEip', { domain: 'vpc' });
@@ -312,7 +315,8 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
     networkMode: NetworkMode.HOST,
     executionRole,
     taskRole,
-    volumes: [{ name: 'hls' }]
+    volumes: [{ name: 'hls' }],
+    family: 'rtmp-app-task-def'
   });
   const appContainer = taskDefinition.addContainer('rtmp-app', {
     image: ContainerImage.fromRegistry(config.appImage),
@@ -349,6 +353,7 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
   const appService = new Ec2Service(scope, 'AppService', {
     cluster,
     taskDefinition,
+    serviceName: 'rtmp-app-service',
     desiredCount: Math.max(1, config.desiredAppCount),
     circuitBreaker: { rollback: false },
     minHealthyPercent: 0,

@@ -89,6 +89,7 @@ export function createManagedInfra(scope: Construct, config: InfraConfig): Manag
     natGateways: 0,
     subnetConfiguration: [{ name: 'public', subnetType: SubnetType.PUBLIC }]
   });
+  vpc.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
 
   const cluster = new Cluster(scope, 'Cluster', { vpc });
   const logGroup = new LogGroup(scope, 'LogGroup', {
