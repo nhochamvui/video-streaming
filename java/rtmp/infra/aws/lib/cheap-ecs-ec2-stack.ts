@@ -332,21 +332,12 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   new cdk.CfnOutput(scope, 'HlsBucketName', { value: storage.bucket.bucketName });
   new cdk.CfnOutput(scope, 'DomainConfiguration', { value: `Point ${config.rtmpHost} to Elastic IP ${proxyElasticIp.ref}` });
 
-  new StringParameter(scope, 'GrafanaCloudPromUrl', {
-    parameterName: '/rtmp/demo/grafana-cloud-prom-url',
-    stringValue: '',
-    description: 'Grafana Cloud Prometheus remote_write URL'
-  });
-  new StringParameter(scope, 'GrafanaCloudPromUser', {
-    parameterName: '/rtmp/demo/grafana-cloud-prom-user',
-    stringValue: '',
-    description: 'Grafana Cloud Prometheus metrics instance ID'
-  });
-  new StringParameter(scope, 'GrafanaCloudPromToken', {
-    parameterName: '/rtmp/demo/grafana-cloud-prom-token',
-    stringValue: '',
-    description: 'Grafana Cloud Prometheus access policy token'
-  });
+  StringParameter.fromStringParameterName(scope, 'GrafanaCloudPromUrl',
+    '/rtmp/demo/grafana-cloud-prom-url');
+  StringParameter.fromStringParameterName(scope, 'GrafanaCloudPromUser',
+    '/rtmp/demo/grafana-cloud-prom-user');
+  StringParameter.fromStringParameterName(scope, 'GrafanaCloudPromToken',
+    '/rtmp/demo/grafana-cloud-prom-token');
 
   return {
     clusterName: cluster.clusterName,
