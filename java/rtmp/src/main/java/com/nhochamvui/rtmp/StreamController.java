@@ -64,7 +64,7 @@ public class StreamController {
         return renderIndex();
     }
 
-    @Get("/health")
+    @Get("/stream-status")
     @Produces(MediaType.APPLICATION_JSON)
     Map<String, Object> health() {
         Set<String> names = server.getActiveStreamNames();

@@ -2,7 +2,7 @@ import { apiFetch } from './client'
 import type { HealthResponse, StatsResponse, StreamStats } from './types'
 
 export function fetchHealth(): Promise<HealthResponse> {
-  return apiFetch<HealthResponse>('/health')
+  return apiFetch<HealthResponse>('/stream-status')
 }
 
 export function fetchStats(): Promise<StatsResponse> {

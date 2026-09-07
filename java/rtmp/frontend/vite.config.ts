@@ -8,7 +8,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://localhost:8888',
-      '/health': 'http://localhost:8888',
+      '/stream-status': 'http://localhost:8888',
       '/stats': 'http://localhost:8888',
       '/version': 'http://localhost:8888',
       '/hls': 'http://localhost:8888',
