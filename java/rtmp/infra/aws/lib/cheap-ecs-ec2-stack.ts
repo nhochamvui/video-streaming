@@ -152,8 +152,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
       `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/hmac-secret`,
       `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/auth-password`,
       `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/max-pending-per-ip`,
-      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/max-active-per-ip`,
-      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/prometheus-token`
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/max-active-per-ip`
     ]
   }));
 
@@ -391,10 +390,6 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
     parameterName: '/rtmp/demo/max-active-per-ip',
     simpleName: false
   });
-  const prometheusTokenParameter = StringParameter.fromStringParameterAttributes(scope, 'PrometheusTokenParameter', {
-    parameterName: '/rtmp/demo/prometheus-token',
-    simpleName: false
-  });
 
   const taskDefinition = new Ec2TaskDefinition(scope, 'AppTask', {
     networkMode: NetworkMode.HOST,
@@ -411,8 +406,7 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
       RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter),
       RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter),
       RTMP_MAX_PENDING_PER_IP: Secret.fromSsmParameter(maxPendingPerIpParameter),
-      RTMP_MAX_ACTIVE_PER_IP: Secret.fromSsmParameter(maxActivePerIpParameter),
-      RTMP_PROMETHEUS_TOKEN: Secret.fromSsmParameter(prometheusTokenParameter)
+      RTMP_MAX_ACTIVE_PER_IP: Secret.fromSsmParameter(maxActivePerIpParameter)
     },
     environment: {
       MICRONAUT_SERVER_PORT: '8888',
