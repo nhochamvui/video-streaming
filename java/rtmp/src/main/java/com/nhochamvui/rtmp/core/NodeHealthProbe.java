@@ -1,6 +1,8 @@
 package com.nhochamvui.rtmp.core;
 
 import jakarta.inject.Singleton;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
@@ -12,25 +14,32 @@ import java.nio.file.Path;
 public class NodeHealthProbe {
 
     private final OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
+    private static final Logger log = LoggerFactory.getLogger(NodeHealthProbe.class);
 
     public double cpuUsagePct() {
         double load = os.getSystemLoadAverage();
+        int processors = os.getAvailableProcessors();
+        log.info("CPU input: loadAverage={}, processors={}", load, processors);
         if (load < 0) {
             return -1;
         }
-        double pct = load / os.getAvailableProcessors() * 100.0;
-        return clamp(pct);
+        double pct = clamp(load / processors * 100.0);
+        log.info("CPU pct: {}", pct);
+        return pct;
     }
 
     public double memoryUsagePct() {
-        double pct = memoryPctFromDir(resolveCgroupDir(cgroup2MountPoint(), selfCgroupPath()));
+        Path dir = resolveCgroupDir(cgroup2MountPoint(), selfCgroupPath());
+        double pct = memoryPctFromDir(dir);
         if (pct >= 0) {
+            log.info("Memory pct: {} (cgroup v2 {})", pct, dir);
             return pct;
         }
         pct = memoryPctFromFiles(
                 Path.of("/sys/fs/cgroup/memory/memory.usage_in_bytes"),
                 Path.of("/sys/fs/cgroup/memory/memory.limit_in_bytes"));
         if (pct >= 0) {
+            log.info("Memory pct: {} (cgroup v1)", pct);
             return pct;
         }
         Runtime runtime = Runtime.getRuntime();
@@ -39,7 +48,10 @@ public class NodeHealthProbe {
             return -1;
         }
         long heapUsed = runtime.totalMemory() - runtime.freeMemory();
-        return clamp(heapUsed * 100.0 / heapMax);
+        log.info("Memory input: heapUsed={}, heapMax={}", heapUsed, heapMax);
+        double heapPct = clamp(heapUsed * 100.0 / heapMax);
+        log.info("Memory pct: {} (JVM heap)", heapPct);
+        return heapPct;
     }
 
     static double memoryPctFromDir(Path dir) {
@@ -56,6 +68,7 @@ public class NodeHealthProbe {
     private static double memoryPctFromFiles(Path currentPath, Path maxPath) {
         long current = readLong(currentPath);
         long max = readLong(maxPath);
+        log.info("Memory input: current={}, max={} ({})", current, max, currentPath.getParent());
         if (current > 0 && max > 0 && max != Long.MAX_VALUE) {
             return clamp(current * 100.0 / max);
         }
