@@ -247,6 +247,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   });
 
   new cdk.CfnOutput(scope, 'ProxyElasticIp', { value: proxyElasticIp.ref });
+  new cdk.CfnOutput(scope, 'ProxyPublicIp', { value: proxyElasticIp.attrPublicIp });
   new cdk.CfnOutput(scope, 'ProxyInstanceId', { value: proxyInstance.instanceId });
   new cdk.CfnOutput(scope, 'AutoScalingGroupName', { value: autoScalingGroup.autoScalingGroupName });
   new cdk.CfnOutput(scope, 'PlaybackBaseUrl', { value: `http://${config.rtmpHost}` });
@@ -315,8 +316,8 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
   });
   const appContainer = taskDefinition.addContainer('rtmp-app', {
     image: ContainerImage.fromRegistry(config.appImage),
-    memoryReservationMiB: 512,
-    memoryLimitMiB: 768,
+    memoryReservationMiB: 384,
+    memoryLimitMiB: 640,
     secrets: {
       RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter),
       RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter),

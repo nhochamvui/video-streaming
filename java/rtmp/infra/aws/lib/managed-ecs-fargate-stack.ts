@@ -169,6 +169,7 @@ export function createManagedInfra(scope: Construct, config: InfraConfig): Manag
   new cdk.CfnOutput(scope, 'ManagedModeWarning', {
     value: 'Scale desiredCount to 0 or destroy this stack immediately after demos to avoid hourly service costs.'
   });
+  new cdk.CfnOutput(scope, 'PublicDnsName', { value: nlb ? nlb.loadBalancerDnsName : alb ? alb.loadBalancerDnsName : '' });
 
   return {
     clusterName: cluster.clusterName,

@@ -229,6 +229,39 @@ jobs:
             -c enableNlb="${{ inputs.enable_nlb }}" \
             -c enableElastiCache="${{ inputs.enable_elasticache }}"
 
+      - name: Update DuckDNS
+        if: ${{ inputs.action == 'deploy' }}
+        env:
+          DUCKDNS_TOKEN: ${{ secrets.DUCKDNS_API_KEY }}
+        run: |
+          SUBDOMAIN=$(echo "${{ inputs.rtmp_host }}" | cut -d. -f1)
+
+          if [ "${{ inputs.deploy_mode }}" = "cheap" ]; then
+            STACK="${{ steps.stacks.outputs.infra }}"
+            PUBLIC_IP=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+              --query "Stacks[0].Outputs[?OutputKey=='ProxyPublicIp'].OutputValue" \
+              --output text)
+          else
+            STACK="${{ steps.stacks.outputs.infra }}"
+            PUBLIC_DNS=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+              --query "Stacks[0].Outputs[?OutputKey=='PublicDnsName'].OutputValue" \
+              --output text)
+            if [ -z "$PUBLIC_DNS" ] || [ "$PUBLIC_DNS" = "None" ]; then
+              echo "No public DNS found; skipping DuckDNS update."
+              exit 0
+            fi
+            PUBLIC_IP=$(dig +short "$PUBLIC_DNS" | head -n 1)
+          fi
+
+          if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "None" ]; then
+            echo "Could not resolve public IP; skipping DuckDNS update."
+            exit 0
+          fi
+
+          echo "Updating DuckDNS: ${SUBDOMAIN} -> ${PUBLIC_IP}"
+          RESPONSE=$(curl -sf "https://www.duckdns.org/update?domains=${SUBDOMAIN}&token=${DUCKDNS_TOKEN}&ip=${PUBLIC_IP}")
+          echo "DuckDNS response: ${RESPONSE}"
+
       - name: Force cleanup before destroy
         if: ${{ inputs.action == 'destroy' }}
         run: |
