@@ -6,11 +6,10 @@
 #   RTMP_USERNAME   = UI/API login username (REQUIRED)
 #   RTMP_PASSWORD   = UI/API login password (REQUIRED)
 #
-# Each runner logs in once, creates a stream session per bot via the API to
-# obtain a stream key, then publishes each bot to rtmp://host:1935/live/<key>.
-# Multiple ffmpeg bots run concurrently per runner (bots_per_runner), so total
-# concurrency = runner jobs x bots_per_runner. On GitHub Free, 20 concurrent
-# jobs x 5 bots = 100 concurrent streams.
+# The job logs in once, creates a stream session per bot via the API to obtain
+# a stream key, then publishes each bot to rtmp://host:1935/live/<key>. Bots are
+# spawned in batches of 5 with a random 30-45s pause between batches, so the ASG
+# has time to scale new nodes instead of taking a concurrency spike.
 #
 # Publish failures are retried (connectivity/scale-out lag) and expired
 # sessions are re-created, up to a bounded number of rounds.
@@ -23,15 +22,10 @@ on:
   workflow_dispatch:
     inputs:
       bot_count:
-        description: "Total number of bots across all runners"
+        description: "Max number of bots to spawn"
         required: true
         type: number
-        default: 100
-      bots_per_runner:
-        description: "Concurrent bots per runner job"
-        required: true
-        type: number
-        default: 5
+        default: 15
       bot_duration:
         description: "Stream duration per bot (seconds)"
         required: true
@@ -68,37 +62,9 @@ env:
   RTMP_PASSWORD: ${{ secrets.RTMP_PASSWORD }}
 
 jobs:
-  # ─── Dynamically generate runner ID array (needed for matrix) ───────────────
-  matrix-generator:
-    runs-on: ubuntu-latest
-    outputs:
-      runner_ids: ${{ steps.gen.outputs.runner_ids }}
-    steps:
-      - id: gen
-        run: |
-          if [ "${{ inputs.burst_mode }}" = "true" ]; then
-            COUNT=${{ inputs.burst_bot_count || 100 }}
-          else
-            COUNT=${{ inputs.bot_count || 100 }}
-          fi
-          BPR=${{ inputs.bots_per_runner || 5 }}
-          RUNNERS=$(( (COUNT + BPR - 1) / BPR ))
-          IDS="["
-          for i in $(seq 0 $((RUNNERS - 1))); do
-            [ "$i" -gt 0 ] && IDS="${IDS},"
-            IDS="${IDS}${i}"
-          done
-          IDS="${IDS}]"
-          echo "runner_ids=${IDS}" >> "$GITHUB_OUTPUT"
-
-  # ─── Normal stress test (multi-bot runners, matrix of runners) ──────────────
+  # ─── Normal stress test (single runner, global batch ramp) ─────────────────
   rtmp-bot:
-    needs: matrix-generator
     if: ${{ !inputs.burst_mode && vars.SKIP_SCHEDULED != 'true' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        runner_id: ${{ fromJSON(needs.matrix-generator.outputs.runner_ids) }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -110,12 +76,9 @@ jobs:
           DURATION=${{ inputs.bot_duration || 300 }}
           RES=${{ inputs.resolution || '1280x720' }}
           BR=${{ inputs.bitrate || '2500k' }}
-          BPR=${{ inputs.bots_per_runner || 5 }}
-          COUNT_TOTAL=${{ inputs.bot_count || 100 }}
+          BOT_COUNT=${{ inputs.bot_count || 15 }}
+          BATCH_SIZE=5
           API_BASE="http://${RTMP_HOST}:${RTMP_API_PORT}"
-          START=$(( ${{ matrix.runner_id }} * BPR ))
-          END=$(( START + BPR ))
-          if [ "$END" -gt "$COUNT_TOTAL" ]; then END=$COUNT_TOTAL; fi
 
           LOGIN_CODE=$(curl -sS -o /tmp/login.json -w '%{http_code}' -c cookies.txt \
             -X POST "${API_BASE}/api/v1/auth/login" \
@@ -177,25 +140,22 @@ jobs:
             return 1
           }
 
-          BOT_TOTAL=$(( END - START ))
-          INITIAL_BATCH=10
-          BATCH_INTERVAL=30
-          BATCH_STEP=2
-          echo "Runner ${{ matrix.runner_id }} → bots ${START}..$((END-1)) | Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
-          NEXT=$START
+          echo "Spawning up to ${BOT_COUNT} bots in batches of ${BATCH_SIZE} every 30-45s | Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
           LAUNCHED=0
-          while [ "$NEXT" -lt "$END" ]; do
-            STEP=$BATCH_STEP
-            if [ "$LAUNCHED" -eq 0 ]; then STEP=$INITIAL_BATCH; fi
-            REMAIN=$(( END - NEXT ))
+          while [ "$LAUNCHED" -lt "$BOT_COUNT" ]; do
+            STEP=$BATCH_SIZE
+            REMAIN=$(( BOT_COUNT - LAUNCHED ))
             if [ "$STEP" -gt "$REMAIN" ]; then STEP=$REMAIN; fi
             for i in $(seq 1 "$STEP"); do
-              run_bot "$NEXT" &
-              NEXT=$(( NEXT + 1 ))
+              run_bot "$(( LAUNCHED + i ))" &
             done
             LAUNCHED=$(( LAUNCHED + STEP ))
-            echo "Runner ${{ matrix.runner_id }}: launched $LAUNCHED/$BOT_TOTAL bots"
-            if [ "$NEXT" -lt "$END" ]; then sleep "$BATCH_INTERVAL"; fi
+            echo "Launched $LAUNCHED/$BOT_COUNT bots"
+            if [ "$LAUNCHED" -lt "$BOT_COUNT" ]; then
+              WAIT=$((30 + RANDOM % 16))
+              echo "Waiting ${WAIT}s for ASG scaling..."
+              sleep "$WAIT"
+            fi
           done
           wait
 
@@ -203,18 +163,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-logs-runner-${{ matrix.runner_id }}
+          name: ffmpeg-logs
           path: ffmpeg-bot-*.log
           retention-days: 1
 
-  # ─── Burst mode: low-res bots x 2 minutes — max concurrency ─────────────────
+  # ─── Burst mode: low-res bots x 2 minutes — batched ramp ───────────────────
   burst:
-    needs: matrix-generator
     if: ${{ inputs.burst_mode == true }}
-    strategy:
-      fail-fast: false
-      matrix:
-        runner_id: ${{ fromJSON(needs.matrix-generator.outputs.runner_ids) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -223,12 +178,9 @@ jobs:
 
       - name: Run burst bots
         run: |
-          BPR=${{ inputs.bots_per_runner || 5 }}
-          COUNT_TOTAL=${{ inputs.burst_bot_count || 100 }}
+          BOT_COUNT=${{ inputs.burst_bot_count || 100 }}
+          BATCH_SIZE=5
           API_BASE="http://${RTMP_HOST}:${RTMP_API_PORT}"
-          START=$(( ${{ matrix.runner_id }} * BPR ))
-          END=$(( START + BPR ))
-          if [ "$END" -gt "$COUNT_TOTAL" ]; then END=$COUNT_TOTAL; fi
 
           LOGIN_CODE=$(curl -sS -o /tmp/login.json -w '%{http_code}' -c cookies.txt \
             -X POST "${API_BASE}/api/v1/auth/login" \
@@ -290,25 +242,22 @@ jobs:
             return 1
           }
 
-          echo "Burst runner ${{ matrix.runner_id }} → bots ${START}..$((END-1))"
-          BOT_TOTAL=$(( END - START ))
-          INITIAL_BATCH=10
-          BATCH_INTERVAL=30
-          BATCH_STEP=2
-          NEXT=$START
+          echo "Burst: spawning up to ${BOT_COUNT} bots in batches of ${BATCH_SIZE} every 30-45s"
           LAUNCHED=0
-          while [ "$NEXT" -lt "$END" ]; do
-            STEP=$BATCH_STEP
-            if [ "$LAUNCHED" -eq 0 ]; then STEP=$INITIAL_BATCH; fi
-            REMAIN=$(( END - NEXT ))
+          while [ "$LAUNCHED" -lt "$BOT_COUNT" ]; do
+            STEP=$BATCH_SIZE
+            REMAIN=$(( BOT_COUNT - LAUNCHED ))
             if [ "$STEP" -gt "$REMAIN" ]; then STEP=$REMAIN; fi
             for i in $(seq 1 "$STEP"); do
-              run_bot "$NEXT" &
-              NEXT=$(( NEXT + 1 ))
+              run_bot "$(( LAUNCHED + i ))" &
             done
             LAUNCHED=$(( LAUNCHED + STEP ))
-            echo "Burst runner ${{ matrix.runner_id }}: launched $LAUNCHED/$BOT_TOTAL bots"
-            if [ "$NEXT" -lt "$END" ]; then sleep "$BATCH_INTERVAL"; fi
+            echo "Burst: launched $LAUNCHED/$BOT_COUNT bots"
+            if [ "$LAUNCHED" -lt "$BOT_COUNT" ]; then
+              WAIT=$((30 + RANDOM % 16))
+              echo "Burst: waiting ${WAIT}s for ASG scaling..."
+              sleep "$WAIT"
+            fi
           done
           wait
 
@@ -316,6 +265,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-logs-burst-runner-${{ matrix.runner_id }}
+          name: ffmpeg-logs-burst
           path: ffmpeg-burst-*.log
           retention-days: 1
