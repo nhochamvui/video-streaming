@@ -158,7 +158,7 @@ jobs:
               fi
               PLAYBACK_URL=$(jq -r '.playbackUrl // empty' "$out")
               echo "Bot ${bot} → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${key} (playback: ${PLAYBACK_URL}, round ${round}/3)" > "$log"
-              for attempt in $(seq 1 30); do
+              for attempt in $(seq 1 5); do
                 if ffmpeg \
                   -re \
                   -f lavfi -i "testsrc=duration=${DURATION}:size=${RES}:rate=30" \
@@ -169,17 +169,33 @@ jobs:
                   "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${key}" >> "$log" 2>&1; then
                   return 0
                 fi
-                echo "Bot ${bot}: publish attempt ${attempt}/30 failed, retrying in 10s" >> "$log"
-                [ "$attempt" -lt 30 ] && sleep 10
+                echo "Bot ${bot}: publish attempt ${attempt}/5 failed, retrying in 15s" >> "$log"
+                [ "$attempt" -lt 5 ] && sleep 15
               done
               echo "Bot ${bot}: stream key expired, re-creating session" >> "$log"
             done
             return 1
           }
 
+          BOT_TOTAL=$(( END - START ))
+          INITIAL_BATCH=10
+          BATCH_INTERVAL=30
+          BATCH_STEP=2
           echo "Runner ${{ matrix.runner_id }} → bots ${START}..$((END-1)) | Resolution: ${RES} | Bitrate: ${BR} | Duration: ${DURATION}s"
-          for BOT in $(seq "$START" $((END - 1))); do
-            run_bot "$BOT" &
+          NEXT=$START
+          LAUNCHED=0
+          while [ "$NEXT" -lt "$END" ]; do
+            STEP=$BATCH_STEP
+            if [ "$LAUNCHED" -eq 0 ]; then STEP=$INITIAL_BATCH; fi
+            REMAIN=$(( END - NEXT ))
+            if [ "$STEP" -gt "$REMAIN" ]; then STEP=$REMAIN; fi
+            for i in $(seq 1 "$STEP"); do
+              run_bot "$NEXT" &
+              NEXT=$(( NEXT + 1 ))
+            done
+            LAUNCHED=$(( LAUNCHED + STEP ))
+            echo "Runner ${{ matrix.runner_id }}: launched $LAUNCHED/$BOT_TOTAL bots"
+            if [ "$NEXT" -lt "$END" ]; then sleep "$BATCH_INTERVAL"; fi
           done
           wait
 
@@ -255,7 +271,7 @@ jobs:
               fi
               PLAYBACK_URL=$(jq -r '.playbackUrl // empty' "$out")
               echo "Burst bot ${bot} → rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${key} (playback: ${PLAYBACK_URL}, round ${round}/3)" > "$log"
-              for attempt in $(seq 1 30); do
+              for attempt in $(seq 1 5); do
                 if ffmpeg \
                   -re \
                   -f lavfi -i "testsrc=duration=120:size=640x360:rate=30" \
@@ -266,8 +282,8 @@ jobs:
                   "rtmp://${RTMP_HOST}:${RTMP_PORT}/live/${key}" >> "$log" 2>&1; then
                   return 0
                 fi
-                echo "Burst bot ${bot}: publish attempt ${attempt}/30 failed, retrying in 10s" >> "$log"
-                [ "$attempt" -lt 30 ] && sleep 10
+                echo "Burst bot ${bot}: publish attempt ${attempt}/5 failed, retrying in 15s" >> "$log"
+                [ "$attempt" -lt 5 ] && sleep 15
               done
               echo "Burst bot ${bot}: stream key expired, re-creating session" >> "$log"
             done
@@ -275,8 +291,24 @@ jobs:
           }
 
           echo "Burst runner ${{ matrix.runner_id }} → bots ${START}..$((END-1))"
-          for BOT in $(seq "$START" $((END - 1))); do
-            run_bot "$BOT" &
+          BOT_TOTAL=$(( END - START ))
+          INITIAL_BATCH=10
+          BATCH_INTERVAL=30
+          BATCH_STEP=2
+          NEXT=$START
+          LAUNCHED=0
+          while [ "$NEXT" -lt "$END" ]; do
+            STEP=$BATCH_STEP
+            if [ "$LAUNCHED" -eq 0 ]; then STEP=$INITIAL_BATCH; fi
+            REMAIN=$(( END - NEXT ))
+            if [ "$STEP" -gt "$REMAIN" ]; then STEP=$REMAIN; fi
+            for i in $(seq 1 "$STEP"); do
+              run_bot "$NEXT" &
+              NEXT=$(( NEXT + 1 ))
+            done
+            LAUNCHED=$(( LAUNCHED + STEP ))
+            echo "Burst runner ${{ matrix.runner_id }}: launched $LAUNCHED/$BOT_TOTAL bots"
+            if [ "$NEXT" -lt "$END" ]; then sleep "$BATCH_INTERVAL"; fi
           done
           wait
 
