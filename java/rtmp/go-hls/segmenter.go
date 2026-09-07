@@ -391,7 +391,7 @@ func (s *Segmenter) ensureInit(force bool) error {
 	}
 
 	init := &fmp4.Init{Tracks: tracks}
-	if err := writeSeekerAtomic(s.outDir, "init.mp4", func(f *os.File) error {
+	if err := writeSeekerAtomic(s.outDir, "init.mp4", true, func(f *os.File) error {
 		return init.Marshal(f)
 	}); err != nil {
 		return err
@@ -402,7 +402,7 @@ func (s *Segmenter) ensureInit(force bool) error {
 }
 
 func (s *Segmenter) writeFrag(part *fmp4.Part, name string) error {
-	err := writeSeekerAtomic(s.outDir, name, func(f *os.File) error {
+	err := writeSeekerAtomic(s.outDir, name, false, func(f *os.File) error {
 		return part.Marshal(f)
 	})
 	if err != nil {
@@ -412,7 +412,7 @@ func (s *Segmenter) writeFrag(part *fmp4.Part, name string) error {
 	return nil
 }
 
-func writeSeekerAtomic(dir, name string, fn func(*os.File) error) error {
+func writeSeekerAtomic(dir, name string, sync bool, fn func(*os.File) error) error {
 	tmp := filepath.Join(dir, "."+name+".tmp")
 	f, err := os.Create(tmp)
 	if err != nil {
@@ -428,9 +428,11 @@ func writeSeekerAtomic(dir, name string, fn func(*os.File) error) error {
 		f.Close()
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
+	if sync {
+		if err := f.Sync(); err != nil {
+			f.Close()
+			return err
+		}
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -515,14 +517,16 @@ func (s *Segmenter) tryCaptureThumbnail(avccBody []byte) {
 	}
 	s.thumbnailCaptured = true
 
-	if err := captureThumbnail(s.outDir, s.videoCodec.SPS, s.videoCodec.PPS, avccBody); err != nil {
-		log.Printf("thumbnail capture failed: %v", err)
-		return
-	}
-	if s.uploader != nil {
-		thumbPath := filepath.Join(filepath.Dir(s.outDir), "thumbnail.jpg")
-		s.uploader.PutThumbnail(s.s3Prefix()+"/thumbnail.jpg", thumbPath)
-	}
+	go func() {
+		if err := captureThumbnail(s.outDir, s.videoCodec.SPS, s.videoCodec.PPS, avccBody); err != nil {
+			log.Printf("thumbnail capture failed: %v", err)
+			return
+		}
+		if s.uploader != nil {
+			thumbPath := filepath.Join(filepath.Dir(s.outDir), "thumbnail.jpg")
+			s.uploader.PutThumbnail(s.s3Prefix()+"/thumbnail.jpg", thumbPath)
+		}
+	}()
 }
 
 // Finish flushes trailing samples and appends ENDLIST.
