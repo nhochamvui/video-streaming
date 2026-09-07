@@ -250,7 +250,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     '      printf \'    , { \\"__address__\\" = \\"%s:8888\\", \\"job\\" = \\"rtmp-server\\" },\\n\' "$ip" >> "$TMP"',
     '    fi',
     '  done',
-    '  printf \'  ]\\n  forward_to = [prometheus.remote_write.cloud.receiver]\\n}\\n\\nprometheus.remote_write \\"cloud\\" {\\n  endpoint {\\n    url             = \\"%s\\"\\n    send_exemplars  = true\\n    basic_auth {\\n      username = \\"%s\\"\\n      password = \\"%s\\"\\n    }\\n  }\\n}\\n\' "$GRAFANA_PROM_URL" "$GRAFANA_PROM_USER" "$GRAFANA_PROM_TOKEN" >> "$TMP"',
+    '  printf \'  ]\\n  metrics_path = \\"/prometheus\\"\\n  scrape_interval = \\"10s\\"\\n  forward_to = [prometheus.remote_write.cloud.receiver]\\n}\\n\\nprometheus.remote_write \\"cloud\\" {\\n  endpoint {\\n    url             = \\"%s\\"\\n    send_exemplars  = true\\n    basic_auth {\\n      username = \\"%s\\"\\n      password = \\"%s\\"\\n    }\\n  }\\n}\\n\' "$GRAFANA_PROM_URL" "$GRAFANA_PROM_USER" "$GRAFANA_PROM_TOKEN" >> "$TMP"',
     'fi',
     'if ! cmp -s "$TMP" "$CFG"; then mv "$TMP" "$CFG"; chmod 644 "$CFG"; systemctl restart alloy; else rm "$TMP"; fi',
     'EOF',
