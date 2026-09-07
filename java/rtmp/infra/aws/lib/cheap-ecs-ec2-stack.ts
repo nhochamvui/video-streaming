@@ -167,12 +167,31 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     ],
     resources: ['*']
   }));
+  proxyRole.addToPolicy(new PolicyStatement({
+    actions: ['ssm:GetParameter'],
+    resources: [
+      `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/grafana-cloud-*`
+    ]
+  }));
 
   const proxyUserData = UserData.forLinux();
   proxyUserData.addCommands(
     'dnf install -y docker awscli jq',
+    'curl -fsSL https://artifacts.grafana.com/gpg.key | gpg --dearmor -o /etc/pki/rpm-gpg/RPM-GPG-KEY-grafana',
+    'cat > /etc/yum.repos.d/grafana.repo <<\'REPO\'',
+    '[grafana]',
+    'name=grafana',
+    'baseurl=https://rpm.grafana.com',
+    'repo_gpgcheck=1',
+    'enabled=1',
+    'gpgcheck=1',
+    'gpgkey=https://rpm.grafana.com/gpg.key',
+    'sslverify=1',
+    'sslcacert=/etc/pki/tls/certs/ca-bundle.crt',
+    'REPO',
+    'dnf install -y alloy',
     'systemctl enable --now docker',
-    'mkdir -p /etc/traefik/dynamic',
+    'mkdir -p /etc/traefik/dynamic /etc/alloy',
     'cat > /etc/traefik/traefik.yml <<\'EOF\'',
     ...TRAEFIK_STATIC_CONFIG.split('\n'),
     'EOF',
@@ -181,6 +200,60 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     'EOF',
     'docker run -d --name redis --restart unless-stopped -p 6379:6379 redis:7-alpine',
     'docker run -d --name traefik --restart unless-stopped --network host -v /etc/traefik:/etc/traefik:ro traefik:v3.7',
+
+    'cat > /etc/alloy/config.alloy <<\'EOF\'',
+    'logging {}',
+    'EOF',
+    'systemctl enable --now alloy',
+
+    'cat > /usr/local/bin/render-alloy-env <<\'EOF\'',
+    '#!/bin/bash',
+    'set -euo pipefail',
+    `REGION="${Stack.of(scope).region}"`,
+    'CREDS_FILE="/etc/alloy/grafana.env"',
+    'mkdir -p /etc/alloy',
+    'PROM_URL="$(aws ssm get-parameter --region "$REGION" --name /rtmp/demo/grafana-cloud-prom-url --query Parameter.Value --output text 2>/dev/null || echo "")"',
+    'PROM_USER="$(aws ssm get-parameter --region "$REGION" --name /rtmp/demo/grafana-cloud-prom-user --query Parameter.Value --output text 2>/dev/null || echo "")"',
+    'PROM_TOKEN="$(aws ssm get-parameter --region "$REGION" --with-decryption --name /rtmp/demo/grafana-cloud-prom-token --query Parameter.Value --output text 2>/dev/null || echo "")"',
+    'cat > "$CREDS_FILE" <<CREDS',
+    'GRAFANA_PROM_URL=$PROM_URL',
+    'GRAFANA_PROM_USER=$PROM_USER',
+    'GRAFANA_PROM_TOKEN=$PROM_TOKEN',
+    'CREDS',
+    'EOF',
+    'chmod +x /usr/local/bin/render-alloy-env',
+    'bash /usr/local/bin/render-alloy-env',
+
+    'cat > /usr/local/bin/render-alloy-config <<\'EOF\'',
+    '#!/bin/bash',
+    'set -euo pipefail',
+    'PRIVATE_IPS="${1:-}"',
+    'CREDS="/etc/alloy/grafana.env"',
+    'CFG="/etc/alloy/config.alloy"',
+    'TMP="$(mktemp)"',
+    'GRAFANA_PROM_URL=""',
+    'GRAFANA_PROM_USER=""',
+    'GRAFANA_PROM_TOKEN=""',
+    '[ -f "$CREDS" ] && source "$CREDS"',
+    'if [ -z "$GRAFANA_PROM_URL" ]; then',
+    '  printf \'logging {}\\n\\nprometheus.scrape \\"disabled\\" {\\n  targets = [{ \\"__address__\\" = \\"127.0.0.1:1\\", \\"job\\" = \\"disabled\\" }]\\n  forward_to = []\\n}\\n\' > "$TMP"',
+    'else',
+    '  printf \'logging {}\\n\\nprometheus.scrape \\"rtmp\\" {\\n  targets = [\\n\' > "$TMP"',
+    '  FIRST=1',
+    '  for ip in $PRIVATE_IPS; do',
+    '    if [ "$FIRST" -eq 1 ]; then',
+    '      printf \'      { \\"__address__\\" = \\"%s:8888\\", \\"job\\" = \\"rtmp-server\\" }\\n\' "$ip" >> "$TMP"',
+    '      FIRST=0',
+    '    else',
+    '      printf \'    , { \\"__address__\\" = \\"%s:8888\\", \\"job\\" = \\"rtmp-server\\" }\\n\' "$ip" >> "$TMP"',
+    '    fi',
+    '  done',
+    '  printf \'  ]\\n  forward_to = [prometheus.remote_write.cloud.receiver]\\n}\\n\\nprometheus.remote_write \\"cloud\\" {\\n  endpoint {\\n    url             = \\"%s\\"\\n    send_exemplars  = true\\n    basic_auth {\\n      username = \\"%s\\"\\n      password = \\"%s\\"\\n    }\\n  }\\n}\\n\' "$GRAFANA_PROM_URL" "$GRAFANA_PROM_USER" "$GRAFANA_PROM_TOKEN" >> "$TMP"',
+    'fi',
+    'if ! cmp -s "$TMP" "$CFG"; then mv "$TMP" "$CFG"; systemctl restart alloy; else rm "$TMP"; fi',
+    'EOF',
+    'chmod +x /usr/local/bin/render-alloy-config',
+
     'cat > /usr/local/bin/render-traefik-backends <<\'EOF\'',
     '#!/bin/bash',
     'set -euo pipefail',
@@ -206,8 +279,10 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     `sed -e '/^#HTTP_SERVERS$/r '"$HTTP_LIST" -e '/^#HTTP_SERVERS$/d' -e '/^#TCP_SERVERS$/r '"$TCP_LIST" -e '/^#TCP_SERVERS$/d' "$BASE_FILE" > "$TMP_FILE"`,
     'rm -f "$HTTP_LIST" "$TCP_LIST"',
     'if ! cmp -s "$TMP_FILE" "$FINAL_FILE"; then mv "$TMP_FILE" "$FINAL_FILE"; else rm "$TMP_FILE"; fi',
+    '/usr/local/bin/render-alloy-config "$PRIVATE_IPS"',
     'EOF',
     'chmod +x /usr/local/bin/render-traefik-backends',
+
     'cat > /etc/systemd/system/traefik-backends.service <<\'EOF\'',
     '[Unit]',
     'Description=Render Traefik ECS backend config',
@@ -256,6 +331,22 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   new cdk.CfnOutput(scope, 'PlaybackBaseUrl', { value: `http://${config.rtmpHost}` });
   new cdk.CfnOutput(scope, 'HlsBucketName', { value: storage.bucket.bucketName });
   new cdk.CfnOutput(scope, 'DomainConfiguration', { value: `Point ${config.rtmpHost} to Elastic IP ${proxyElasticIp.ref}` });
+
+  new StringParameter(scope, 'GrafanaCloudPromUrl', {
+    parameterName: '/rtmp/demo/grafana-cloud-prom-url',
+    stringValue: '',
+    description: 'Grafana Cloud Prometheus remote_write URL'
+  });
+  new StringParameter(scope, 'GrafanaCloudPromUser', {
+    parameterName: '/rtmp/demo/grafana-cloud-prom-user',
+    stringValue: '',
+    description: 'Grafana Cloud Prometheus metrics instance ID'
+  });
+  new StringParameter(scope, 'GrafanaCloudPromToken', {
+    parameterName: '/rtmp/demo/grafana-cloud-prom-token',
+    stringValue: '',
+    description: 'Grafana Cloud Prometheus access policy token'
+  });
 
   return {
     clusterName: cluster.clusterName,
