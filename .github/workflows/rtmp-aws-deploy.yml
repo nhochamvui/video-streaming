@@ -94,6 +94,63 @@ env:
   INFRA_DIR: java/rtmp/infra/aws
 
 jobs:
+  build-image:
+    name: Build app image
+    if: ${{ inputs.action == 'deploy' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Ensure ECR repository exists
+        run: |
+          for REPO in "${ECR_REPOSITORY}" "${ECR_FRONTEND_REPOSITORY}"; do
+            aws ecr describe-repositories --repository-names "${REPO}" >/dev/null 2>&1 \
+              || aws ecr create-repository --repository-name "${REPO}" >/dev/null
+          done
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Check if app image already exists
+        id: image-exists
+        run: |
+          REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+          if docker manifest inspect "$REGISTRY/${ECR_REPOSITORY}:${GITHUB_SHA}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push app image
+        if: ${{ steps.image-exists.outputs.exists == 'false' }}
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: java/rtmp
+          file: ${{ inputs.build_type == 'native' && 'java/rtmp/Dockerfile.native' || 'java/rtmp/Dockerfile' }}
+          platforms: linux/arm64
+          push: true
+          build-contexts: |
+            frontend=docker-image://${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${{ inputs.frontend_tag || 'latest' }}
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   cdk:
     name: ${{ inputs.action }} ${{ inputs.deploy_mode }} stack
     runs-on: ubuntu-24.04-arm
@@ -130,56 +187,12 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: npm run build
 
-      - name: Ensure ECR repository exists
-        if: ${{ inputs.action == 'deploy' }}
-        run: |
-          for REPO in "${ECR_REPOSITORY}" "${ECR_FRONTEND_REPOSITORY}"; do
-            aws ecr describe-repositories --repository-names "${REPO}" >/dev/null 2>&1 \
-              || aws ecr create-repository --repository-name "${REPO}" >/dev/null
-          done
-
-      - name: Log in to Amazon ECR
-        if: ${{ inputs.action == 'deploy' }}
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Set up Docker Buildx
-        if: ${{ inputs.action == 'deploy' }}
-        uses: docker/setup-buildx-action@v3
-
-      - name: Check if app image already exists
-        if: ${{ inputs.action == 'deploy' }}
-        id: image-exists
-        run: |
-          REGISTRY="${{ steps.ecr-login.outputs.registry }}"
-          if docker manifest inspect "$REGISTRY/${ECR_REPOSITORY}:${GITHUB_SHA}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build and push app image
-        if: ${{ inputs.action == 'deploy' && steps.image-exists.outputs.exists == 'false' }}
-        id: image
-        uses: docker/build-push-action@v6
-        with:
-          context: java/rtmp
-          file: ${{ inputs.build_type == 'native' && 'java/rtmp/Dockerfile.native' || 'java/rtmp/Dockerfile' }}
-          platforms: linux/arm64
-          push: true
-          build-contexts: |
-            frontend=docker-image://${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${{ inputs.frontend_tag || 'latest' }}
-          tags: |
-            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
       - name: Resolve app image
         id: app-image
         run: |
           if [ "${{ inputs.action }}" = "deploy" ]; then
-            echo "uri=${{ steps.ecr-login.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+            echo "uri=${ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           else
             echo "uri=public.ecr.aws/docker/library/eclipse-temurin:21-jre" >> "$GITHUB_OUTPUT"
           fi
