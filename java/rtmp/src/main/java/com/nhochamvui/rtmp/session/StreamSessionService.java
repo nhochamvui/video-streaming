@@ -16,6 +16,7 @@ public class StreamSessionService {
     private final String playbackBaseUrl;
     private final int maxPendingPerIp;
     private final int maxActivePerIp;
+    private final int maxActiveStreamsPerNode;
 
     public StreamSessionService(
             StreamKeyGenerator keyGenerator,
@@ -24,7 +25,8 @@ public class StreamSessionService {
             NodeRegistry nodeRegistry,
             @Value("${rtmp.playback-base-url}") String playbackBaseUrl,
             @Value("${rtmp.limits.pending-per-ip:5}") int maxPendingPerIp,
-            @Value("${rtmp.limits.active-per-ip:1}") int maxActivePerIp
+            @Value("${rtmp.limits.active-per-ip:1}") int maxActivePerIp,
+            @Value("${rtmp.limits.active-streams-per-node:18}") int maxActiveStreamsPerNode
     ) {
         this.keyGenerator = keyGenerator;
         this.keyHasher = keyHasher;
@@ -33,6 +35,7 @@ public class StreamSessionService {
         this.playbackBaseUrl = trimTrailingSlash(playbackBaseUrl);
         this.maxPendingPerIp = maxPendingPerIp;
         this.maxActivePerIp = maxActivePerIp;
+        this.maxActiveStreamsPerNode = maxActiveStreamsPerNode;
     }
 
     public CreateStreamSessionResponse create(StreamSessionCreateRequest request) {
@@ -46,6 +49,9 @@ public class StreamSessionService {
 
         IngestNode node = nodeRegistry.selectLeastLoadedNode()
                 .orElseThrow(() -> new IllegalStateException("No healthy ingest nodes are available"));
+        if (node.activeStreams() >= maxActiveStreamsPerNode) {
+            throw new StreamSessionLimitExceeded("All ingest nodes are at capacity");
+        }
         String publishKey = keyGenerator.generatePublishKey();
         String lookupKey = keyHasher.lookupKey(publishKey);
         String playbackId = keyGenerator.generatePlaybackId();

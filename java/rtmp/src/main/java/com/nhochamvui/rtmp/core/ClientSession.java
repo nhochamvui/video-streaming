@@ -508,6 +508,11 @@ public class ClientSession {
             case "publish":
                 log.info("[{}] Processing publish...", connectionId);
                 {
+                    if (!server.canAcceptStream()) {
+                        log.warn("[{}] Reject publish | node at capacity ({} active streams)", connectionId, server.activeStreamCount());
+                        sendPublishStatus(messageStreamId, "error", "NetStream.Publish.BadName", "Server is at maximum stream capacity");
+                        throw new StreamClose();
+                    }
                     String publishName = messages.size() > 3 && messages.get(3) != null
                             ? messages.get(3).toString() : "stream";
                     String publishType = messages.size() > 4 && messages.get(4) != null

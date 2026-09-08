@@ -15,21 +15,34 @@ public class NodeHealthProbe {
 
     private final OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
     private static final Logger log = LoggerFactory.getLogger(NodeHealthProbe.class);
+    private volatile long lastCpuUsageUs = -1;
+    private volatile long lastCpuSampleNs = -1;
 
-    public double cpuUsagePct() {
-        double load = os.getSystemLoadAverage();
-        int processors = os.getAvailableProcessors();
-        log.info("CPU input: loadAverage={}, processors={}", load, processors);
-        if (load < 0) {
-            return -1;
+    public synchronized double cpuUsagePct() {
+        long usageUs = readCpuUsageUs(cgroupDir().resolve("cpu.stat"));
+        if (usageUs < 0) {
+            return loadAverageCpu();
         }
-        double pct = clamp(load / processors * 100.0);
-        log.info("CPU pct: {}", pct);
+        long nowNs = System.nanoTime();
+        if (lastCpuUsageUs < 0) {
+            lastCpuUsageUs = usageUs;
+            lastCpuSampleNs = nowNs;
+            log.info("CPU pct: 0.0 (cgroup first sample)");
+            return 0.0;
+        }
+        long deltaUs = usageUs - lastCpuUsageUs;
+        long elapsedNs = nowNs - lastCpuSampleNs;
+        lastCpuUsageUs = usageUs;
+        lastCpuSampleNs = nowNs;
+        int processors = os.getAvailableProcessors();
+        log.info("CPU input: usageUsDelta={}, windowNs={}, processors={}", deltaUs, elapsedNs, processors);
+        double pct = cpuPctFromSamples(deltaUs, elapsedNs, processors);
+        log.info("CPU pct: {} (cgroup)", pct);
         return pct;
     }
 
     public double memoryUsagePct() {
-        Path dir = resolveCgroupDir(cgroup2MountPoint(), selfCgroupPath());
+        Path dir = cgroupDir();
         double pct = memoryPctFromDir(dir);
         if (pct >= 0) {
             log.info("Memory pct: {} (cgroup v2 {})", pct, dir);
@@ -54,8 +67,32 @@ public class NodeHealthProbe {
         return heapPct;
     }
 
+    private static Path cgroupDir() {
+        return resolveCgroupDir(cgroup2MountPoint(), selfCgroupPath());
+    }
+
+    private double loadAverageCpu() {
+        double load = os.getSystemLoadAverage();
+        int processors = os.getAvailableProcessors();
+        log.info("CPU input: loadAverage={}, processors={}", load, processors);
+        if (load < 0) {
+            return -1;
+        }
+        double pct = clamp(load / processors * 100.0);
+        log.info("CPU pct: {} (load average)", pct);
+        return pct;
+    }
+
     static double memoryPctFromDir(Path dir) {
         return memoryPctFromFiles(dir.resolve("memory.current"), dir.resolve("memory.max"));
+    }
+
+    static double cpuPctFromSamples(long deltaUs, long elapsedNs, int processors) {
+        if (deltaUs <= 0 || elapsedNs <= 0 || processors <= 0) {
+            return 0.0;
+        }
+        double cpuFraction = (double) deltaUs * 1_000.0 / elapsedNs;
+        return clamp(cpuFraction / processors * 100.0);
     }
 
     static Path resolveCgroupDir(String mountPoint, String selfPath) {
@@ -118,5 +155,17 @@ public class NodeHealthProbe {
         } catch (IOException | NumberFormatException e) {
             return -1;
         }
+    }
+
+    private static long readCpuUsageUs(Path cpuStatPath) {
+        try {
+            for (String line : Files.readAllLines(cpuStatPath)) {
+                if (line.startsWith("usage_usec")) {
+                    return Long.parseLong(line.substring(line.indexOf(' ') + 1).trim());
+                }
+            }
+        } catch (IOException | NumberFormatException e) {
+        }
+        return -1;
     }
 }

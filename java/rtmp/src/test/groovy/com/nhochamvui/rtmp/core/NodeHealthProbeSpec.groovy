@@ -36,6 +36,15 @@ class NodeHealthProbeSpec extends Specification {
         NodeHealthProbe.memoryPctFromDir(tempDir) == -1.0d
     }
 
+    def 'cpu percent from cgroup usage samples'() {
+        expect:
+        NodeHealthProbe.cpuPctFromSamples(1_000_000, 1_000_000_000, 2) == 50.0d
+        NodeHealthProbe.cpuPctFromSamples(2_000_000, 1_000_000_000, 2) == 100.0d
+        NodeHealthProbe.cpuPctFromSamples(1_000_000, 1_000_000_000, 4) == 25.0d
+        NodeHealthProbe.cpuPctFromSamples(0, 1_000_000_000, 2) == 0.0d
+        NodeHealthProbe.cpuPctFromSamples(1_000_000, 0, 2) == 0.0d
+    }
+
     def 'cgroup dir resolves a nested self path'() {
         expect:
         NodeHealthProbe.resolveCgroupDir('/sys/fs/cgroup', '/ecstasks.slice/ecs-1/container') ==

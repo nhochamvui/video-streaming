@@ -16,7 +16,8 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
                 "https://example.test/stream",
                 5,
-                1
+                1,
+                18
         )
 
         when:
@@ -45,7 +46,29 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
                 "https://example.test/stream",
                 5,
-                1
+                1,
+                18
+        )
+
+        when:
+        service.create(new StreamSessionCreateRequest("203.0.113.10", "browser", null))
+
+        then:
+        thrown(StreamSessionLimitExceeded)
+    }
+
+    def "session creation is rejected when all ingest nodes are at capacity"() {
+        given:
+        def repo = new MemoryRepo()
+        def service = new StreamSessionService(
+                new FixedGenerator("key", "playback"),
+                new StreamKeyHasher("01234567890123456789012345678901"),
+                repo,
+                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 18, 0, 1)),
+                "https://example.test/stream",
+                5,
+                1,
+                18
         )
 
         when:
@@ -81,7 +104,8 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
                 "https://example.test/stream",
                 5,
-                1
+                1,
+                18
         )
 
         when:
@@ -122,7 +146,8 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedNodeRegistry(new IngestNode("node-selected-by-api", "rtmp://rtmp.example.test/live", NodeStatus.ACTIVE, 0, 0, 1)),
                 "https://example.test/stream",
                 5,
-                1
+                1,
+                18
         )
 
         when:
@@ -161,7 +186,8 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
                 "https://example.test/stream",
                 5,
-                1
+                1,
+                18
         )
 
         when:
@@ -200,7 +226,8 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
                 "https://example.test/stream",
                 5,
-                1
+                1,
+                18
         )
 
         when:

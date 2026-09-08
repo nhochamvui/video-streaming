@@ -401,7 +401,7 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
   const appContainer = taskDefinition.addContainer('rtmp-app', {
     image: ContainerImage.fromRegistry(config.appImage),
     memoryReservationMiB: 384,
-    memoryLimitMiB: 640,
+    memoryLimitMiB: 384,
     secrets: {
       RTMP_HMAC_SECRET: Secret.fromSsmParameter(secretParameter),
       RTMP_AUTH_PASSWORD: Secret.fromSsmParameter(authPasswordParameter),
@@ -419,7 +419,8 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
       RTMP_HLS_ROOT: '/app/hls',
       RTMP_HLS_BUCKET: refs.bucketName,
       RTMP_HLS_REGION: Stack.of(scope).region,
-      RTMP_AUTH_USERNAME: config.rtmpAuthUsername
+      RTMP_AUTH_USERNAME: config.rtmpAuthUsername,
+      RTMP_MAX_ACTIVE_STREAMS_PER_NODE: '18'
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
   });

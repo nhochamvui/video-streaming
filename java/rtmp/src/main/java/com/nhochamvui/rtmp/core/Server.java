@@ -32,6 +32,7 @@ public class Server {
     private final String hlsBucket;
     private final String hlsRegion;
     private final String hlsCdnUrl;
+    private final int maxActiveStreams;
 
     public Server(
             StreamSessionService streamSessionService,
@@ -41,7 +42,8 @@ public class Server {
             @Value("${rtmp.port:1935}") int port,
             @Value("${rtmp.hls.bucket:}") String hlsBucket,
             @Value("${rtmp.hls.region:}") String hlsRegion,
-            @Value("${rtmp.hls.cdn-url:}") String hlsCdnUrl
+            @Value("${rtmp.hls.cdn-url:}") String hlsCdnUrl,
+            @Value("${rtmp.limits.active-streams-per-node:18}") int maxActiveStreams
     ) {
         this.streamSessionService = streamSessionService;
         this.safePlaybackPath = safePlaybackPath;
@@ -51,7 +53,8 @@ public class Server {
         this.hlsBucket = hlsBucket;
         this.hlsRegion = hlsRegion;
         this.hlsCdnUrl = hlsCdnUrl;
-        log.info("RTMP Server initialized | serverId={} | port={} | hlsBucket={} | hlsRegion={}", this.serverId, port, hlsBucket, hlsRegion);
+        this.maxActiveStreams = maxActiveStreams;
+        log.info("RTMP Server initialized | serverId={} | port={} | hlsBucket={} | hlsRegion={} | maxActiveStreams={}", this.serverId, port, hlsBucket, hlsRegion, maxActiveStreams);
     }
 
     public void listen() {
@@ -88,6 +91,14 @@ public class Server {
 
     void unregisterStream(String name, ClientSession session) {
         streams.remove(name, session);
+    }
+
+    public boolean canAcceptStream() {
+        return streams.size() < maxActiveStreams;
+    }
+
+    public int activeStreamCount() {
+        return streams.size();
     }
 
     public Set<String> getActiveStreamNames() {
