@@ -4,6 +4,7 @@ import { AmazonLinuxCpuType, CfnEIP, CfnEIPAssociation, Instance, InstanceType, 
 import { AmiHardwareType, AsgCapacityProvider, AwsLogDriver, Cluster, ContainerImage, Ec2Service, Ec2TaskDefinition, EcsOptimizedImage, NetworkMode, PlacementConstraint, Secret } from 'aws-cdk-lib/aws-ecs';
 import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
+import { Metric } from 'aws-cdk-lib/aws-cloudwatch';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
 import { AutoScalingGroup } from 'aws-cdk-lib/aws-autoscaling';
 import { Construct } from 'constructs';
@@ -146,6 +147,10 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   });
   storage.bucket.grantReadWrite(taskRole);
   cluster.grants.taskProtection(taskRole);
+  taskRole.addToPolicy(new PolicyStatement({
+    actions: ['cloudwatch:PutMetricData'],
+    resources: ['*']
+  }));
   executionRole.addToPolicy(new PolicyStatement({
     actions: ['ssm:GetParameter', 'ssm:GetParameters'],
     resources: [
@@ -420,7 +425,8 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
       RTMP_HLS_BUCKET: refs.bucketName,
       RTMP_HLS_REGION: Stack.of(scope).region,
       RTMP_AUTH_USERNAME: config.rtmpAuthUsername,
-      RTMP_MAX_ACTIVE_STREAMS_PER_NODE: '18'
+      RTMP_MAX_ACTIVE_STREAMS_PER_NODE: '18',
+      AWS_REGION: Stack.of(scope).region
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
   });
@@ -453,6 +459,15 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
   });
   scaling.scaleOnMemoryUtilization('MemoryScaling', {
     targetUtilizationPercent: 90,
+    disableScaleIn: true
+  });
+  scaling.scaleToTrackCustomMetric('StreamScaling', {
+    metric: new Metric({
+      namespace: 'RTMP',
+      metricName: 'ActiveStreams',
+      statistic: 'Average'
+    }),
+    targetValue: 15,
     disableScaleIn: true
   });
 

@@ -24,6 +24,7 @@ dependencies {
     implementation("io.micronaut:micronaut-management")
     implementation("io.micronaut.micrometer:micronaut-micrometer-core")
     implementation("software.amazon.awssdk:ecs")
+    implementation("software.amazon.awssdk:cloudwatch")
     implementation("software.amazon.awssdk:url-connection-client")
     compileOnly("io.micronaut:micronaut-http-client")
     runtimeOnly("io.micronaut.micrometer:micronaut-micrometer-registry-prometheus")
