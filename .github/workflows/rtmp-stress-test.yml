@@ -41,8 +41,6 @@ on:
         required: false
         type: boolean
         default: false
-  schedule:
-    - cron: "*/30 * * * *"
 
 env:
   RTMP_HOST: ${{ secrets.RTMP_HOST || 'zoutube.duckdns.org' }}
