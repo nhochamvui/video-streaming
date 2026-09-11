@@ -47,7 +47,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Download native binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rtmp-native
           path: java/rtmp/build/native/nativeCompile
