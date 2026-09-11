@@ -189,8 +189,6 @@ docs/                     architecture + scaling phase plans
 
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md) - detailed component/design reference.
-- [`docs/scaling/`](docs/scaling) - scale-out phase plans (orchestration, RTMP throttle experiment, session retry).
 - [`java/rtmp/infra/aws/README.md`](java/rtmp/infra/aws/README.md) - AWS deployment guide.
 
 ## License
