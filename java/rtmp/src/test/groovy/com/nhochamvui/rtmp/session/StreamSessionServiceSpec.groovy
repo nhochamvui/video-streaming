@@ -57,7 +57,7 @@ class StreamSessionServiceSpec extends Specification {
         thrown(StreamSessionLimitExceeded)
     }
 
-    def "session creation is rejected when all ingest nodes are at capacity"() {
+    def "session creation is rejected when the cluster is at capacity"() {
         given:
         def repo = new MemoryRepo()
         def service = new StreamSessionService(
@@ -75,7 +75,7 @@ class StreamSessionServiceSpec extends Specification {
         service.create(new StreamSessionCreateRequest("203.0.113.10", "browser", null))
 
         then:
-        thrown(StreamSessionLimitExceeded)
+        thrown(StreamCapacityUnavailable)
     }
 
     def "valid publish claims session and exposes playbackId only"() {

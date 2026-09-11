@@ -13,6 +13,9 @@ import java.util.Map;
 
 @Controller("/api/v1/stream-sessions")
 public class StreamSessionController {
+
+    private static final int CAPACITY_RETRY_AFTER_SECONDS = 30;
+
     private final StreamSessionService streamSessionService;
 
     public StreamSessionController(StreamSessionService streamSessionService) {
@@ -31,6 +34,10 @@ public class StreamSessionController {
             return HttpResponse.created(streamSessionService.create(createRequest));
         } catch (StreamSessionLimitExceeded e) {
             return HttpResponse.status(HttpStatus.TOO_MANY_REQUESTS).body(Map.of("error", e.getMessage()));
+        } catch (StreamCapacityUnavailable e) {
+            return HttpResponse.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .header("Retry-After", Integer.toString(CAPACITY_RETRY_AFTER_SECONDS))
+                    .body(Map.of("error", e.getMessage(), "retryAfterSeconds", CAPACITY_RETRY_AFTER_SECONDS));
         } catch (IllegalStateException e) {
             return HttpResponse.serverError(Map.of("error", e.getMessage()));
         }

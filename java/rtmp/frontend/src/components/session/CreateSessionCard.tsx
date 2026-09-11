@@ -15,7 +15,7 @@ export function CreateSessionCard() {
   const { status, error, statusCode, session, expiresAt } = useAppSelector((state) => state.session)
   const remaining = useCountdown(expiresAt)
 
-  const busy = status === 'loading'
+  const busy = status === 'loading' || status === 'waiting'
   const expired = session !== null && expiresAt !== null && Date.now() >= expiresAt
 
   useEffect(() => {
@@ -43,9 +43,11 @@ export function CreateSessionCard() {
   const statusMessage =
     status === 'error'
       ? error
-      : status === 'success' && session
-        ? 'Stream key created. Start publishing before it expires.'
-        : ''
+      : status === 'waiting'
+        ? 'Waiting for capacity, starting stream session automatically...'
+        : status === 'success' && session
+          ? 'Stream key created. Start publishing before it expires.'
+          : ''
 
   if (auth.status === 'checking') {
     return <StatusMessage message="Checking authentication…" />
@@ -63,7 +65,11 @@ export function CreateSessionCard() {
   return (
     <div>
       <Button onClick={handleCreate} disabled={busy}>
-        {status === 'success' ? 'Generate new' : 'Create stream session'}
+        {status === 'waiting'
+          ? 'Waiting for capacity...'
+          : status === 'success'
+            ? 'Generate new'
+            : 'Create stream session'}
       </Button>
       <StatusMessage message={statusMessage} type={statusType} />
 

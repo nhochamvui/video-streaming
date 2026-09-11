@@ -50,7 +50,7 @@ public class StreamSessionService {
         IngestNode node = nodeRegistry.selectLeastLoadedNode()
                 .orElseThrow(() -> new IllegalStateException("No healthy ingest nodes are available"));
         if (node.activeStreams() >= maxActiveStreamsPerNode) {
-            throw new StreamSessionLimitExceeded("All ingest nodes are at capacity");
+            throw new StreamCapacityUnavailable("All ingest nodes are at capacity");
         }
         String publishKey = keyGenerator.generatePublishKey();
         String lookupKey = keyHasher.lookupKey(publishKey);
