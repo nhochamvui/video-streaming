@@ -19,6 +19,11 @@ public class NodeHealthProbe {
     private volatile long lastCpuSampleNs = -1;
 
     public synchronized double cpuUsagePct() {
+        int cores = Runtime.getRuntime().availableProcessors();
+        log.info("Available CPU Cores: {}", cores);
+        double systemCpuLoad = os.getSystemLoadAverage() * 100;
+        log.info("System CPU Usage: {}%", systemCpuLoad);
+
         long usageUs = readCpuUsageUs(cgroupDir().resolve("cpu.stat"));
         if (usageUs < 0) {
             return loadAverageCpu();
