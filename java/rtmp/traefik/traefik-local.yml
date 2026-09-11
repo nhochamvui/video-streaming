@@ -1,0 +1,11 @@
+entryPoints:
+  web:
+    address: ":80"
+  rtmp:
+    address: ":1935"
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+log:
+  level: INFO

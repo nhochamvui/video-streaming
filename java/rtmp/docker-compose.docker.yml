@@ -1,0 +1,28 @@
+services:
+  traefik:
+    ports:
+      - "1935:1935"
+    volumes:
+      - ./traefik/traefik-local.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/traefik-dynamic-local.yml:/etc/traefik/dynamic/traefik-dynamic.yml:ro
+
+  rtmp-server:
+    build: .
+    container_name: rtmp-server
+    environment:
+      REDIS_URI: "redis://redis:6379"
+      RTMP_SERVER_ID: "${RTMP_SERVER_ID:-local-node}"
+      RTMP_ENDPOINT: "${RTMP_ENDPOINT:-rtmp://localhost/live}"
+      RTMP_PLAYBACK_BASE_URL: "${RTMP_PLAYBACK_BASE_URL:-http://localhost}"
+      RTMP_HLS_ROOT: "/app/hls"
+      RTMP_HMAC_SECRET: "${RTMP_HMAC_SECRET:-Set RTMP_HMAC_SECRET to at least 32 random bytes before starting123123123123123123}"
+      RTMP_AUTH_USERNAME: "${RTMP_AUTH_USERNAME:-admin}"
+      RTMP_AUTH_PASSWORD: "${RTMP_AUTH_PASSWORD:-admin}"
+    volumes:
+      - ./hls:/app/hls
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - rtmp-net

@@ -1,0 +1,32 @@
+http:
+  routers:
+    app:
+      entryPoints:
+        - web
+      rule: PathPrefix(`/`)
+      service: app
+  services:
+    app:
+      loadBalancer:
+        servers:
+          - url: http://rtmp-server:8888
+        strategy: p2c
+        healthCheck:
+          path: /health/ready
+          interval: 10s
+          timeout: 3s
+tcp:
+  routers:
+    rtmp:
+      entryPoints:
+        - rtmp
+      rule: HostSNI(`*`)
+      service: rtmp
+  services:
+    rtmp:
+      loadBalancer:
+        servers:
+          - address: rtmp-server:1935
+        healthCheck:
+          interval: 15s
+          timeout: 3s

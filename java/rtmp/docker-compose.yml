@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   redis:
     image: redis:7-alpine
@@ -7,35 +5,24 @@ services:
     ports:
       - "6379:6379"
     restart: unless-stopped
+    networks:
+      - rtmp-net
 
-  nginx:
-    image: nginx:alpine
-    container_name: rtmp-nginx
+  traefik:
+    image: traefik:v3.7
+    container_name: rtmp-traefik
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "80:80"
     volumes:
-      - ./hls:/app/hls:ro
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - rtmp-server
-    user: root
-    restart: unless-stopped
-
-  rtmp-server:
-    build: .
-    container_name: rtmp-server
-    ports:
-      - "1935:1935"
-    environment:
-      REDIS_URI: "redis://redis:6379"
-      RTMP_SERVER_ID: "${RTMP_SERVER_ID:-local-node}"
-      RTMP_ENDPOINT: "${RTMP_ENDPOINT:-rtmp://localhost/live}"
-      RTMP_PLAYBACK_BASE_URL: "${RTMP_PLAYBACK_BASE_URL:-http://localhost}"
-      RTMP_HLS_ROOT: "/app/hls"
-      RTMP_HMAC_SECRET: "${RTMP_HMAC_SECRET:?Set RTMP_HMAC_SECRET to at least 32 random bytes before starting}"
-    volumes:
-      - ./hls:/app/hls
-      - ./logs:/app/logs
+      - ./traefik/traefik-local.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/traefik-dynamic-dev.yml:/etc/traefik/dynamic/traefik-dynamic.yml:ro
     depends_on:
       - redis
     restart: unless-stopped
+    networks:
+      - rtmp-net
+
+networks:
+  rtmp-net:
