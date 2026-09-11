@@ -145,7 +145,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: ${{ inputs.action == 'deploy' }}
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Check if app image already exists
         if: ${{ inputs.action == 'deploy' }}
