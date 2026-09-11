@@ -1,0 +1,91 @@
+name: CI
+
+# Runs on every branch push and on pull requests, so a bad commit is caught
+# before it reaches the deploy workflows.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref (saves Actions minutes on force-pushes).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Backend + frontend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: java/rtmp/frontend/package-lock.json
+
+      # Gradle builds the frontend (npm ci + vite) during processResources and
+      # then runs the Spock/Java suite, so this single step covers both stacks.
+      - name: Run tests
+        working-directory: java/rtmp
+        run: chmod +x gradlew && ./gradlew test --no-daemon --console=plain
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: java/rtmp/build/reports/tests/test
+          retention-days: 7
+
+  infra:
+    name: Infra typecheck + cdk synth
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # infra/aws/package-lock.json is intentionally untracked -> use npm install.
+      - name: Install infra dependencies
+        working-directory: java/rtmp/infra/aws
+        run: npm install
+
+      - name: Typecheck
+        working-directory: java/rtmp/infra/aws
+        run: npm run build
+
+      - name: CDK synth (cheap)
+        working-directory: java/rtmp/infra/aws
+        run: npx cdk synth -c deployMode=cheap
+
+      - name: CDK synth (managed)
+        working-directory: java/rtmp/infra/aws
+        run: npx cdk synth -c deployMode=managed

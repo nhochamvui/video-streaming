@@ -1,0 +1,18 @@
+# Code owners for the video-streamming repository.
+# Lines are matched top-down; the last matching pattern wins.
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything not matched below.
+*                           @nhochamvui
+
+# CI/CD and repository automation
+/.github/                   @nhochamvui
+
+# AWS infrastructure (CDK)
+/java/rtmp/infra/           @nhochamvui
+
+# Go HLS segmenter
+/java/rtmp/go-hls/          @nhochamvui
+
+# React frontend
+/java/rtmp/frontend/        @nhochamvui
