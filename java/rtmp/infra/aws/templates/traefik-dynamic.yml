@@ -12,7 +12,7 @@ http:
 #HTTP_SERVERS
         strategy: p2c
         healthCheck:
-          path: /health/ready
+          path: /health/live
           interval: 10s
           timeout: 3s
 tcp:

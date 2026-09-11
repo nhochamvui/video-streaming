@@ -108,6 +108,15 @@ public class StreamController {
         return HttpResponse.status(status).body(body);
     }
 
+    @Get("/health/live")
+    @Produces(MediaType.APPLICATION_JSON)
+    Map<String, Object> healthLive() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "alive");
+        body.put("activeStreams", server.activeStreamCount());
+        return body;
+    }
+
     @Get("/stats")
     @Produces(MediaType.APPLICATION_JSON)
     Map<String, Object> stats() {

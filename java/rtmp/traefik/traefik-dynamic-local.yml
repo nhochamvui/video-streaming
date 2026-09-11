@@ -12,7 +12,7 @@ http:
           - url: http://rtmp-server:8888
         strategy: p2c
         healthCheck:
-          path: /health/ready
+          path: /health/live
           interval: 10s
           timeout: 3s
 tcp:

@@ -129,9 +129,11 @@ Scale-out is driven by a near-real-time stream-capacity signal instead of the sl
 - A Lambda (outside any VPC) calls `ecs:UpdateService` to bump `desiredCount` by 1,
   capped at `maxAppCount`; the ECS capacity provider then promotes a pre-booted ASG
   warm-pool instance (~1 min instead of a 2-4 min cold boot).
-- Each app node returns `503` from `/health/ready` once it reaches
-  `RTMP_HEALTH_MAX_STREAMS` (default 15) active streams, so Traefik's p2c balancer
-  steers new session creation toward an emptier node.
+- Liveness and readiness are separate: Traefik's health check uses `/health/live`
+  (a node stays in rotation unless the app is truly down), while `/health/ready`
+  reports capacity (`RTMP_HEALTH_MAX_STREAMS`, default 15; CPU/memory thresholds)
+  for the scale signal and dashboards. Admission control lives at the API: a full
+  node returns `503` + `Retry-After` for new sessions and the UI retries.
 
 CPU target-tracking (90%) is kept as a CPU-driven backstop. The experimental RTMP
 publish throttle (`RTMP_THROTTLE_HANDSHAKE_MS`, `RTMP_THROTTLE_CHUNK_SIZE_MS`,

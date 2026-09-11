@@ -55,6 +55,15 @@ class StreamControllerSpec extends Specification {
         exchangeSafely(HttpRequest.GET('/health/ready')).status == HttpStatus.OK
     }
 
+    void 'health live stays OK even when the node is overloaded'() {
+        given:
+        StubNodeHealthProbe.cpuPct = 98.0
+        StubNodeHealthProbe.memPct = 95.0
+
+        expect:
+        exchangeSafely(HttpRequest.GET('/health/live')).status == HttpStatus.OK
+    }
+
     private HttpResponse<?> exchangeSafely(HttpRequest<?> request) {
         try {
             return client.toBlocking().exchange(request)
