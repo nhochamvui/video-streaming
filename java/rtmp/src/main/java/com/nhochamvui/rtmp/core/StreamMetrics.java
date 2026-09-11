@@ -3,11 +3,11 @@ package com.nhochamvui.rtmp.core;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
-import jakarta.inject.Singleton;
+import io.micronaut.context.annotation.Context;
 
 import java.util.Map;
 
-@Singleton
+@Context
 public class StreamMetrics {
 
     private final MeterRegistry registry;
