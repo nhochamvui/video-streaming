@@ -5,7 +5,7 @@ import { AmiHardwareType, AsgCapacityProvider, AwsLogDriver, Cluster, ContainerI
 import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
-import { AutoScalingGroup, PoolState, WarmPool } from 'aws-cdk-lib/aws-autoscaling';
+import { AutoScalingGroup } from 'aws-cdk-lib/aws-autoscaling';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
@@ -102,7 +102,6 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   userData.addCommands(
     'echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config',
     'echo ECS_CLUSTER=rtmp-cheap >> /etc/ecs/ecs.config',
-    'echo ECS_WARM_POOLS_CHECK=true >> /etc/ecs/ecs.config',
     'echo \'ECS_AVAILABLE_LOGGING_DRIVERS=["json-file","awslogs"]\' >> /etc/ecs/ecs.config',
     'yum update -y ecs-init',
     'curl -sSL https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh',
@@ -135,13 +134,6 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     enableManagedTerminationProtection: true
   });
   cluster.addAsgCapacityProvider(capacityProvider);
-
-  new WarmPool(scope, 'WarmPool', {
-    autoScalingGroup,
-    poolState: PoolState.RUNNING,
-    minSize: 1,
-    maxGroupPreparedCapacity: 1
-  });
 
   const logGroup = new LogGroup(scope, 'LogGroup', {
     retention: RetentionDays.THREE_DAYS,

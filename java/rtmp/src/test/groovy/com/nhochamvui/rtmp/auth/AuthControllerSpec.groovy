@@ -123,6 +123,11 @@ class AuthControllerSpec extends Specification {
         return Cookie.of(properties.cookieName, value)
     }
 
+    @MockBean(AuthSessionStore)
+    AuthSessionStore authSessionStore() {
+        return new InMemoryAuthSessionStore(new AuthProperties())
+    }
+
     @MockBean(NodeRegistry)
     NodeRegistry nodeRegistry() {
         NodeRegistry mock = Mock(NodeRegistry)

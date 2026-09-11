@@ -127,8 +127,8 @@ Scale-out is driven by a near-real-time stream-capacity signal instead of the sl
 - When headroom drops below one node's worth (edge-triggered via a `/var/tmp`
   latch), the proxy sends one message to the `rtmp-scale-out` SQS queue.
 - A Lambda (outside any VPC) calls `ecs:UpdateService` to bump `desiredCount` by 1,
-  capped at `maxAppCount`; the ECS capacity provider then promotes a pre-booted ASG
-  warm-pool instance (~1 min instead of a 2-4 min cold boot).
+  capped at `maxAppCount`; the ECS capacity provider then boots a new EC2 instance
+  and places a task on it (~2-4 min cold boot).
 - Liveness and readiness are separate: Traefik's health check uses `/health/live`
   (a node stays in rotation unless the app is truly down), while `/health/ready`
   reports capacity (`RTMP_HEALTH_MAX_STREAMS`, default 15; CPU/memory thresholds)

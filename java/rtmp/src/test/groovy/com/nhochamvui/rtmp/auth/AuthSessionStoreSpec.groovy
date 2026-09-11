@@ -6,7 +6,7 @@ class AuthSessionStoreSpec extends Specification {
 
     def "created session tokens are unique and valid"() {
         given:
-        def store = new AuthSessionStore(new AuthProperties())
+        def store = new InMemoryAuthSessionStore(new AuthProperties())
 
         when:
         def token1 = store.create('admin')
@@ -23,7 +23,7 @@ class AuthSessionStoreSpec extends Specification {
         given:
         def properties = new AuthProperties()
         properties.sessionTtlSeconds = -1
-        def store = new AuthSessionStore(properties)
+        def store = new InMemoryAuthSessionStore(properties)
 
         when:
         def token = store.create('admin')
@@ -35,7 +35,7 @@ class AuthSessionStoreSpec extends Specification {
 
     def "invalidated session is invalid"() {
         given:
-        def store = new AuthSessionStore(new AuthProperties())
+        def store = new InMemoryAuthSessionStore(new AuthProperties())
         def token = store.create('admin')
         store.invalidate(token)
 
@@ -46,7 +46,7 @@ class AuthSessionStoreSpec extends Specification {
 
     def "null, empty and unknown tokens are invalid"() {
         given:
-        def store = new AuthSessionStore(new AuthProperties())
+        def store = new InMemoryAuthSessionStore(new AuthProperties())
 
         expect:
         !store.isValid(null)
