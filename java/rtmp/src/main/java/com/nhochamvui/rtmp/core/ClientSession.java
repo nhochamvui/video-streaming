@@ -51,6 +51,7 @@ public class ClientSession {
     private final String connectionId;
     private final String connectionIp;
     private final long connectionStartTime;
+    private final RtmpThrottleConfig throttle;
 
     private int inChunkSize = 128;
     private int outChunkSize = 128;
@@ -85,7 +86,7 @@ public class ClientSession {
     private volatile String ffmpegSpeed;
     private volatile boolean streaming;
 
-    public ClientSession(Socket socket, Server server, StreamSessionService streamSessionService, SafePlaybackPath safePlaybackPath, String serverId, String hlsBucket, String hlsRegion, String hlsCdnUrl) throws IOException {
+    public ClientSession(Socket socket, Server server, StreamSessionService streamSessionService, SafePlaybackPath safePlaybackPath, String serverId, String hlsBucket, String hlsRegion, String hlsCdnUrl, RtmpThrottleConfig throttle) throws IOException {
         this.socket = socket;
         this.server = server;
         this.streamSessionService = streamSessionService;
@@ -94,6 +95,7 @@ public class ClientSession {
         this.hlsBucket = hlsBucket;
         this.hlsRegion = hlsRegion;
         this.hlsCdnUrl = hlsCdnUrl;
+        this.throttle = throttle;
         this.socket.setTcpNoDelay(true);
         this.socket.setSoTimeout(5000);
         this.connectionStartTime = System.currentTimeMillis();
@@ -178,11 +180,26 @@ public class ClientSession {
         return bytesToFfmpeg;
     }
 
+    private void sleepMs(String stage, long ms) {
+        if (ms <= 0) {
+            return;
+        }
+        log.info("[{}] Throttling {} | {}ms | activeStreams={}", connectionId, stage, ms, server.activeStreamCount());
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private void handleHandShake() throws IOException {
         log.info("[{}] Handshake started.", connectionId);
         int c0 = inputStream.read();
         byte[] c1 = readToBuffer(inputStream, HANDSHAKE_LENGTH);
         sendS0S1(c0);
+        if (throttle.enabled(server.activeStreamCount())) {
+            sleepMs("handshake", throttle.handshakeMs());
+        }
         sendS2(c1);
         byte[] c2 = readToBuffer(inputStream, HANDSHAKE_LENGTH);
         log.info("[{}] Handshake finished.", connectionId);
@@ -236,6 +253,9 @@ public class ClientSession {
                     case 1:
                         this.inChunkSize = currentMessageData.getInt(0);
                         log.info("[{}] Process SetChunkSize message, new inChunkSize: {}", connectionId, this.inChunkSize);
+                        if (throttle.enabled(server.activeStreamCount())) {
+                            sleepMs("chunk-size", throttle.chunkSizeMs());
+                        }
                         break;
                     case 2:
                         log.info("[{}] Process AbortMessage message", connectionId);
@@ -508,6 +528,9 @@ public class ClientSession {
             case "publish":
                 log.info("[{}] Processing publish...", connectionId);
                 {
+                    if (throttle.enabled(server.activeStreamCount())) {
+                        sleepMs("publish", throttle.publishMs());
+                    }
                     if (!server.canAcceptStream()) {
                         log.warn("[{}] Reject publish | node at capacity ({} active streams)", connectionId, server.activeStreamCount());
                         sendPublishStatus(messageStreamId, "error", "NetStream.Publish.BadName", "Server is at maximum stream capacity");

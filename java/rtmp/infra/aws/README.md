@@ -29,6 +29,30 @@ aws ssm put-parameter \
   --value '<at-least-32-random-bytes>'
 ```
 
+Create the auth password and per-IP session limits:
+
+```sh
+aws ssm put-parameter \
+  --name /rtmp/demo/auth-password \
+  --type SecureString \
+  --value '<ui-password>'
+
+aws ssm put-parameter \
+  --name /rtmp/demo/max-pending-per-ip \
+  --type String \
+  --value '10'
+
+aws ssm put-parameter \
+  --name /rtmp/demo/max-active-per-ip \
+  --type String \
+  --value '10'
+```
+
+The `max-pending-per-ip` and `max-active-per-ip` values map to the container env
+vars `RTMP_MAX_PENDING_PER_IP` and `RTMP_MAX_ACTIVE_PER_IP`; change them in SSM
+and redeploy (or restart tasks) to apply. ECS tasks fail to start if any of these
+parameters is missing.
+
 For GitHub Actions deployment, also configure:
 
 - Repository secret `AWS_GITHUB_DEPLOY_ROLE_ARN`: IAM role ARN trusted by GitHub OIDC.
@@ -92,6 +116,26 @@ Cheap mode now maps app tasks to ECS EC2 instances with fixed ports:
 `desiredAppCount` controls both the number of app tasks and the number of ECS EC2 instances. Each app task is placed on a distinct EC2 instance because all app tasks bind the same host ports. Use only one active stream per free-tier-size EC2 instance. `hls-segmenter` and S3 upload remain the real CPU/RAM floor.
 
 HLS is mirrored to S3 by the `hls-segmenter` process itself (no separate uploader container): it PUTs each written segment/playlist asynchronously and prunes expired objects. There is no longer an aws-cli uploader sidecar.
+
+### Scale-out (cheap mode)
+
+Scale-out is driven by a near-real-time stream-capacity signal instead of the slow
+`RTMP/ActiveStreams` CloudWatch target-tracking:
+
+- The Traefik proxy polls each app node's `/prometheus` every 10s and sums free
+  slots (`18 - rtmp_active_streams` per node).
+- When headroom drops below one node's worth (edge-triggered via a `/var/tmp`
+  latch), the proxy sends one message to the `rtmp-scale-out` SQS queue.
+- A Lambda (outside any VPC) calls `ecs:UpdateService` to bump `desiredCount` by 1,
+  capped at `maxAppCount`; the ECS capacity provider then promotes a pre-booted ASG
+  warm-pool instance (~1 min instead of a 2-4 min cold boot).
+- Each app node returns `503` from `/health/ready` once it reaches
+  `RTMP_HEALTH_MAX_STREAMS` (default 15) active streams, so Traefik's p2c balancer
+  steers new session creation toward an emptier node.
+
+CPU target-tracking (90%) is kept as a CPU-driven backstop. The experimental RTMP
+publish throttle (`RTMP_THROTTLE_HANDSHAKE_MS`, `RTMP_THROTTLE_CHUNK_SIZE_MS`,
+`RTMP_THROTTLE_PUBLISH_MS`, gated by `RTMP_THROTTLE_MIN_STREAMS`) is off by default.
 
 ## Managed Mode
 

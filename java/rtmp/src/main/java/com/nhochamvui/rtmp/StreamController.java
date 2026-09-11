@@ -34,6 +34,9 @@ public class StreamController {
     @Value("${rtmp.health.max-mem-pct:90}")
     double maxMemPct;
 
+    @Value("${rtmp.health.max-streams:15}")
+    int maxStreams;
+
     public StreamController(Server server, NodeHealthProbe nodeHealthProbe) {
         this.server = server;
         this.nodeHealthProbe = nodeHealthProbe;
@@ -87,15 +90,18 @@ public class StreamController {
     HttpResponse<Map<String, Object>> healthReady() {
         double cpuPct = nodeHealthProbe.cpuUsagePct();
         double memPct = nodeHealthProbe.memoryUsagePct();
-        boolean overloaded = cpuPct >= maxCpuPct || memPct >= maxMemPct;
+        int activeStreams = server.activeStreamCount();
+        boolean overloaded = cpuPct >= maxCpuPct || memPct >= maxMemPct || activeStreams >= maxStreams;
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", overloaded ? "unhealthy" : "healthy");
         body.put("cpuPct", cpuPct);
         body.put("memPct", memPct);
+        body.put("activeStreams", activeStreams);
         Map<String, Object> limits = new LinkedHashMap<>();
         limits.put("cpuPct", maxCpuPct);
         limits.put("memPct", maxMemPct);
+        limits.put("maxStreams", maxStreams);
         body.put("limits", limits);
 
         HttpStatus status = overloaded ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.OK;

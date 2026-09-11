@@ -33,6 +33,7 @@ public class Server {
     private final String hlsRegion;
     private final String hlsCdnUrl;
     private final int maxActiveStreams;
+    private final RtmpThrottleConfig throttle;
 
     public Server(
             StreamSessionService streamSessionService,
@@ -43,7 +44,11 @@ public class Server {
             @Value("${rtmp.hls.bucket:}") String hlsBucket,
             @Value("${rtmp.hls.region:}") String hlsRegion,
             @Value("${rtmp.hls.cdn-url:}") String hlsCdnUrl,
-            @Value("${rtmp.limits.active-streams-per-node:18}") int maxActiveStreams
+            @Value("${rtmp.limits.active-streams-per-node:18}") int maxActiveStreams,
+            @Value("${rtmp.throttle.min-streams:18}") int throttleMinStreams,
+            @Value("${rtmp.throttle.handshake-ms:0}") long throttleHandshakeMs,
+            @Value("${rtmp.throttle.chunk-size-ms:0}") long throttleChunkSizeMs,
+            @Value("${rtmp.throttle.publish-ms:0}") long throttlePublishMs
     ) {
         this.streamSessionService = streamSessionService;
         this.safePlaybackPath = safePlaybackPath;
@@ -54,7 +59,8 @@ public class Server {
         this.hlsRegion = hlsRegion;
         this.hlsCdnUrl = hlsCdnUrl;
         this.maxActiveStreams = maxActiveStreams;
-        log.info("RTMP Server initialized | serverId={} | port={} | hlsBucket={} | hlsRegion={} | maxActiveStreams={}", this.serverId, port, hlsBucket, hlsRegion, maxActiveStreams);
+        this.throttle = new RtmpThrottleConfig(throttleMinStreams, throttleHandshakeMs, throttleChunkSizeMs, throttlePublishMs);
+        log.info("RTMP Server initialized | serverId={} | port={} | hlsBucket={} | hlsRegion={} | maxActiveStreams={} | throttle={}", this.serverId, port, hlsBucket, hlsRegion, maxActiveStreams, this.throttle);
     }
 
     public void listen() {
@@ -66,7 +72,7 @@ public class Server {
                     Socket socket = serverSocket.accept();
                     Thread.ofVirtual().start(() -> {
                         try (socket) {
-                            new ClientSession(socket, Server.this, streamSessionService, safePlaybackPath, serverId, hlsBucket, hlsRegion, hlsCdnUrl).run();
+                            new ClientSession(socket, Server.this, streamSessionService, safePlaybackPath, serverId, hlsBucket, hlsRegion, hlsCdnUrl, throttle).run();
                         } catch (Exception e) {
                             log.error("ClientSession fatal error", e);
                         }

@@ -4,9 +4,12 @@ import { AmazonLinuxCpuType, CfnEIP, CfnEIPAssociation, Instance, InstanceType, 
 import { AmiHardwareType, AsgCapacityProvider, AwsLogDriver, Cluster, ContainerImage, Ec2Service, Ec2TaskDefinition, EcsOptimizedImage, NetworkMode, PlacementConstraint, Secret } from 'aws-cdk-lib/aws-ecs';
 import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { Metric } from 'aws-cdk-lib/aws-cloudwatch';
 import { StringParameter } from 'aws-cdk-lib/aws-ssm';
-import { AutoScalingGroup } from 'aws-cdk-lib/aws-autoscaling';
+import { AutoScalingGroup, PoolState, WarmPool } from 'aws-cdk-lib/aws-autoscaling';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -99,6 +102,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
   userData.addCommands(
     'echo ECS_ENABLE_CONTAINER_METADATA=true >> /etc/ecs/ecs.config',
     'echo ECS_CLUSTER=rtmp-cheap >> /etc/ecs/ecs.config',
+    'echo ECS_WARM_POOLS_CHECK=true >> /etc/ecs/ecs.config',
     'echo \'ECS_AVAILABLE_LOGGING_DRIVERS=["json-file","awslogs"]\' >> /etc/ecs/ecs.config',
     'yum update -y ecs-init',
     'curl -sSL https://get.netdata.cloud/kickstart.sh -o /tmp/netdata-kickstart.sh',
@@ -131,6 +135,13 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     enableManagedTerminationProtection: true
   });
   cluster.addAsgCapacityProvider(capacityProvider);
+
+  new WarmPool(scope, 'WarmPool', {
+    autoScalingGroup,
+    poolState: PoolState.RUNNING,
+    minSize: 1,
+    maxGroupPreparedCapacity: 1
+  });
 
   const logGroup = new LogGroup(scope, 'LogGroup', {
     retention: RetentionDays.THREE_DAYS,
@@ -175,6 +186,35 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     actions: ['ssm:GetParameter'],
     resources: [
       `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/grafana-cloud-*`
+    ]
+  }));
+
+  const scaleOutQueue = new sqs.Queue(scope, 'ScaleOutQueue', {
+    queueName: 'rtmp-scale-out',
+    visibilityTimeout: cdk.Duration.seconds(60),
+    removalPolicy: cdk.RemovalPolicy.DESTROY
+  });
+  scaleOutQueue.grantSendMessages(proxyRole);
+
+  const scaleOutLambda = new NodejsFunction(scope, 'ScaleOutLambda', {
+    runtime: lambda.Runtime.NODEJS_22_X,
+    entry: path.join(__dirname, '..', 'lambda', 'scale-out', 'index.ts'),
+    handler: 'handler',
+    timeout: cdk.Duration.seconds(20),
+    environment: {
+      CLUSTER_NAME: cluster.clusterName,
+      SERVICE_NAME: 'rtmp-app-service',
+      MAX_APP_COUNT: String(config.maxAppCount)
+    }
+  });
+  scaleOutLambda.addEventSource(new SqsEventSource(scaleOutQueue, {
+    batchSize: 1,
+    maxConcurrency: 2
+  }));
+  scaleOutLambda.addToRolePolicy(new PolicyStatement({
+    actions: ['ecs:DescribeServices', 'ecs:UpdateService'],
+    resources: [
+      `arn:aws:ecs:${Stack.of(scope).region}:${Stack.of(scope).account}:service/${cluster.clusterName}/rtmp-app-service`
     ]
   }));
 
@@ -269,6 +309,8 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     'BASE_FILE="/etc/traefik/ecs-base.yml"',
     'TMP_FILE="$(mktemp)"',
     'FINAL_FILE="/etc/traefik/dynamic/ecs.yml"',
+    'HARD_CAP=18',
+    'LATCH_FILE="/var/tmp/scale-signal.state"',
     'INSTANCE_IDS="$(aws autoscaling describe-auto-scaling-groups --region "$REGION" --auto-scaling-group-names "$ASG_NAME" --query \'AutoScalingGroups[0].Instances[?LifecycleState==`InService`].InstanceId\' --output text)"',
     'PRIVATE_IPS=""',
     'if [ -n "$INSTANCE_IDS" ]; then',
@@ -287,6 +329,26 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     'rm -f "$HTTP_LIST" "$TCP_LIST"',
     'if ! cmp -s "$TMP_FILE" "$FINAL_FILE"; then mv "$TMP_FILE" "$FINAL_FILE"; else rm "$TMP_FILE"; fi',
     '/usr/local/bin/render-alloy-config "$PRIVATE_IPS"',
+    'FREE_SLOTS=0',
+    'NOTIFICATIONS=0',
+    'if [ -n "$PRIVATE_IPS" ]; then',
+    '  for ip in $PRIVATE_IPS; do',
+    '    STREAMS="$(curl -fsS --max-time 3 "http://$ip:8888/prometheus" 2>/dev/null | awk \'/^rtmp_active_streams/ {print int($2)}\' || echo 0)"',
+    '    STREAMS="${STREAMS:-0}"',
+    '    FREE_SLOTS=$((FREE_SLOTS + HARD_CAP - STREAMS))',
+    '  done',
+    'fi',
+    'PREV="$(cat "$LATCH_FILE" 2>/dev/null || echo ok)"',
+    'if [ "$FREE_SLOTS" -lt "$HARD_CAP" ]; then',
+    '  if [ "$PREV" != "low" ]; then',
+    '    echo "low" > "$LATCH_FILE"',
+    `    aws sqs send-message --region "$REGION" --queue-url "${scaleOutQueue.queueUrl}" --message-body "{\\"freeSlots\\":$FREE_SLOTS,\\"hardCap\\":$HARD_CAP}" 2>/dev/null || true`,
+    '    NOTIFICATIONS=$((NOTIFICATIONS + 1))',
+    '  fi',
+    'elif [ "$PREV" = "low" ]; then',
+    '  echo "ok" > "$LATCH_FILE"',
+    'fi',
+    'echo "scale-signal: freeSlots=$FREE_SLOTS notifications=$NOTIFICATIONS"',
     'EOF',
     'chmod +x /usr/local/bin/render-traefik-backends',
 
@@ -304,7 +366,7 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     '',
     '[Timer]',
     'OnBootSec=20s',
-    'OnUnitActiveSec=15s',
+    'OnUnitActiveSec=10s',
     'Unit=traefik-backends.service',
     '',
     '[Install]',
@@ -426,6 +488,11 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
       RTMP_HLS_REGION: Stack.of(scope).region,
       RTMP_AUTH_USERNAME: config.rtmpAuthUsername,
       RTMP_MAX_ACTIVE_STREAMS_PER_NODE: '18',
+      RTMP_HEALTH_MAX_STREAMS: '15',
+      RTMP_THROTTLE_MIN_STREAMS: '18',
+      RTMP_THROTTLE_HANDSHAKE_MS: '0',
+      RTMP_THROTTLE_CHUNK_SIZE_MS: '0',
+      RTMP_THROTTLE_PUBLISH_MS: '0',
       AWS_REGION: Stack.of(scope).region
     },
     logging: new AwsLogDriver({ streamPrefix: 'app', logGroup })
@@ -459,15 +526,6 @@ export function createCheapApp(scope: Construct, config: InfraConfig, refs: Chea
   });
   scaling.scaleOnMemoryUtilization('MemoryScaling', {
     targetUtilizationPercent: 90,
-    disableScaleIn: true
-  });
-  scaling.scaleToTrackCustomMetric('StreamScaling', {
-    metric: new Metric({
-      namespace: 'RTMP',
-      metricName: 'ActiveStreams',
-      statistic: 'Average'
-    }),
-    targetValue: 15,
     disableScaleIn: true
   });
 
