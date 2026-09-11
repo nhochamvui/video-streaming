@@ -51,6 +51,11 @@ on:
         required: false
         type: boolean
         default: false
+      session_max_wait:
+        description: "Seconds to keep retrying stream-session creation while the cluster scales out"
+        required: false
+        type: number
+        default: 300
   schedule:
     - cron: "*/30 * * * *"
 
@@ -60,6 +65,7 @@ env:
   RTMP_API_PORT: ${{ secrets.RTMP_API_PORT || '80' }}
   RTMP_USERNAME: ${{ secrets.RTMP_USERNAME }}
   RTMP_PASSWORD: ${{ secrets.RTMP_PASSWORD }}
+  SESSION_MAX_WAIT: ${{ inputs.session_max_wait || 300 }}
 
 jobs:
   # ─── Normal stress test (single runner, global batch ramp) ─────────────────
@@ -92,20 +98,57 @@ jobs:
 
           create_session() {
             local out=$1
-            for attempt in 1 2 3; do
-              SESSION_CODE=$(curl -sS -o "$out" -w '%{http_code}' -b cookies.txt \
-                -X POST "${API_BASE}/api/v1/stream-sessions")
-              KEY=$(jq -r '.streamKey // empty' "$out")
-              if [ "$SESSION_CODE" = "201" ] && [ -n "$KEY" ]; then
-                echo "$KEY"
+            local max_wait="${SESSION_MAX_WAIT:-300}"
+            local deadline=$(( $(date +%s) + max_wait ))
+            local delay=2
+            local attempt=1
+            local code key retry_after now
+            while :; do
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "Gave up after ${max_wait}s waiting for a stream session" >&2
+                echo ""
+                return 1
+              fi
+              code=$(curl -sS -o "$out" -D "${out}.headers" -w '%{http_code}' -b cookies.txt \
+                -X POST "${API_BASE}/api/v1/stream-sessions" || true)
+              key=$(jq -r '.streamKey // empty' "$out" 2>/dev/null || true)
+              if [ "$code" = "201" ] && [ -n "$key" ]; then
+                echo "$key"
                 return 0
               fi
-              echo "Session creation attempt ${attempt}/3 failed (HTTP ${SESSION_CODE})" >&2
-              cat "$out" >&2
-              [ "$attempt" -lt 3 ] && sleep 5
+              if [ "$code" = "401" ]; then
+                echo "Auth cookie rejected (HTTP 401); re-authenticating" >&2
+                curl -sS -o /tmp/login.json -c cookies.txt \
+                  -X POST "${API_BASE}/api/v1/auth/login" \
+                  -H 'Content-Type: application/json' \
+                  -d "{\"username\":\"${RTMP_USERNAME}\",\"password\":\"${RTMP_PASSWORD}\"}" >/dev/null || true
+                sleep 3
+                attempt=$(( attempt + 1 ))
+                continue
+              fi
+              if [ "$code" != "503" ] && [ "$code" != "429" ]; then
+                echo "Session creation failed (HTTP ${code}): $(cat "$out")" >&2
+                echo ""
+                return 1
+              fi
+              retry_after=$(grep -i '^retry-after:' "${out}.headers" 2>/dev/null | tr -d '\r' | awk '{print $2}' | head -n1 || true)
+              case "$retry_after" in
+                ''|*[!0-9]*)
+                  retry_after=$delay
+                  delay=$(( delay * 2 ))
+                  if [ "$delay" -gt 60 ]; then delay=60; fi
+                  ;;
+              esac
+              now=$(date +%s)
+              if [ $(( now + retry_after )) -gt "$deadline" ]; then
+                echo "Gave up after ${max_wait}s (last HTTP ${code})" >&2
+                echo ""
+                return 1
+              fi
+              echo "No capacity yet (HTTP ${code}); retry ${attempt} in ${retry_after}s (waited $(( now - deadline + max_wait ))s)" >&2
+              sleep "$retry_after"
+              attempt=$(( attempt + 1 ))
             done
-            echo ""
-            return 1
           }
 
           run_bot() {
@@ -194,20 +237,57 @@ jobs:
 
           create_session() {
             local out=$1
-            for attempt in 1 2 3; do
-              SESSION_CODE=$(curl -sS -o "$out" -w '%{http_code}' -b cookies.txt \
-                -X POST "${API_BASE}/api/v1/stream-sessions")
-              KEY=$(jq -r '.streamKey // empty' "$out")
-              if [ "$SESSION_CODE" = "201" ] && [ -n "$KEY" ]; then
-                echo "$KEY"
+            local max_wait="${SESSION_MAX_WAIT:-300}"
+            local deadline=$(( $(date +%s) + max_wait ))
+            local delay=2
+            local attempt=1
+            local code key retry_after now
+            while :; do
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "Gave up after ${max_wait}s waiting for a stream session" >&2
+                echo ""
+                return 1
+              fi
+              code=$(curl -sS -o "$out" -D "${out}.headers" -w '%{http_code}' -b cookies.txt \
+                -X POST "${API_BASE}/api/v1/stream-sessions" || true)
+              key=$(jq -r '.streamKey // empty' "$out" 2>/dev/null || true)
+              if [ "$code" = "201" ] && [ -n "$key" ]; then
+                echo "$key"
                 return 0
               fi
-              echo "Session creation attempt ${attempt}/3 failed (HTTP ${SESSION_CODE})" >&2
-              cat "$out" >&2
-              [ "$attempt" -lt 3 ] && sleep 5
+              if [ "$code" = "401" ]; then
+                echo "Auth cookie rejected (HTTP 401); re-authenticating" >&2
+                curl -sS -o /tmp/login.json -c cookies.txt \
+                  -X POST "${API_BASE}/api/v1/auth/login" \
+                  -H 'Content-Type: application/json' \
+                  -d "{\"username\":\"${RTMP_USERNAME}\",\"password\":\"${RTMP_PASSWORD}\"}" >/dev/null || true
+                sleep 3
+                attempt=$(( attempt + 1 ))
+                continue
+              fi
+              if [ "$code" != "503" ] && [ "$code" != "429" ]; then
+                echo "Session creation failed (HTTP ${code}): $(cat "$out")" >&2
+                echo ""
+                return 1
+              fi
+              retry_after=$(grep -i '^retry-after:' "${out}.headers" 2>/dev/null | tr -d '\r' | awk '{print $2}' | head -n1 || true)
+              case "$retry_after" in
+                ''|*[!0-9]*)
+                  retry_after=$delay
+                  delay=$(( delay * 2 ))
+                  if [ "$delay" -gt 60 ]; then delay=60; fi
+                  ;;
+              esac
+              now=$(date +%s)
+              if [ $(( now + retry_after )) -gt "$deadline" ]; then
+                echo "Gave up after ${max_wait}s (last HTTP ${code})" >&2
+                echo ""
+                return 1
+              fi
+              echo "No capacity yet (HTTP ${code}); retry ${attempt} in ${retry_after}s (waited $(( now - deadline + max_wait ))s)" >&2
+              sleep "$retry_after"
+              attempt=$(( attempt + 1 ))
             done
-            echo ""
-            return 1
           }
 
           run_bot() {

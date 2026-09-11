@@ -58,7 +58,7 @@ proxy polls each node /prometheus every 10s -> freeSlots = SUM(18 - rtmp_active_
 
 Graceful admission during scale-out: when every node is at capacity,
 `POST /api/v1/stream-sessions` returns `503` with `Retry-After`, and the UI retries with
-backoff (up to ~2 min) showing "Waiting for capacity..." instead of failing. Per-IP
+backoff (up to ~5 min) showing "Waiting for capacity..." instead of failing. Per-IP
 limits still return `429`.
 
 Main AWS resources (cheap mode): VPC (single AZ, public subnets), Traefik proxy EC2 +

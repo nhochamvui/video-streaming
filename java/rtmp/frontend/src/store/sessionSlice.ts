@@ -3,7 +3,7 @@ import { ApiError } from '../api/client'
 import { createStreamSession } from '../api/session'
 import type { StreamSession } from '../api/types'
 
-const MAX_RETRY_WINDOW_MS = 120_000
+const MAX_RETRY_WINDOW_MS = 300_000
 const RETRYABLE_STATUSES = [429, 503]
 
 interface SessionState {
