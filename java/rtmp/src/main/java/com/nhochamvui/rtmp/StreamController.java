@@ -3,6 +3,8 @@ package com.nhochamvui.rtmp;
 import com.nhochamvui.rtmp.core.ClientSession;
 import com.nhochamvui.rtmp.core.NodeHealthProbe;
 import com.nhochamvui.rtmp.core.Server;
+import com.nhochamvui.rtmp.session.IngestNode;
+import com.nhochamvui.rtmp.session.NodeRegistry;
 import io.micronaut.context.annotation.Value;
 import io.micronaut.http.HttpResponse;
 import io.micronaut.http.HttpStatus;
@@ -14,6 +16,8 @@ import io.micronaut.http.annotation.Produces;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -23,6 +27,7 @@ public class StreamController {
 
     private final Server server;
     private final NodeHealthProbe nodeHealthProbe;
+    private final NodeRegistry nodeRegistry;
     private String indexHtml;
 
     @Value("${rtmp.hls.cdn-url:}")
@@ -37,9 +42,10 @@ public class StreamController {
     @Value("${rtmp.health.max-streams:15}")
     int maxStreams;
 
-    public StreamController(Server server, NodeHealthProbe nodeHealthProbe) {
+    public StreamController(Server server, NodeHealthProbe nodeHealthProbe, NodeRegistry nodeRegistry) {
         this.server = server;
         this.nodeHealthProbe = nodeHealthProbe;
+        this.nodeRegistry = nodeRegistry;
     }
 
     @Get("/config")
@@ -70,15 +76,24 @@ public class StreamController {
     @Get("/stream-status")
     @Produces(MediaType.APPLICATION_JSON)
     Map<String, Object> health() {
-        Set<String> names = server.getActiveStreamNames();
+        Collection<IngestNode> nodes = nodeRegistry.listActiveNodes();
+        Set<String> allStreams = new HashSet<>();
+        Map<String, String> streamOwnership = new LinkedHashMap<>();
+        for (IngestNode node : nodes) {
+            for (String name : node.streamNames()) {
+                allStreams.add(name);
+                streamOwnership.put(name, node.serverId());
+            }
+        }
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("status", names.isEmpty() ? "idle" : "streaming");
-        result.put("activeStreams", names.size());
-        result.put("streams", new ArrayList<>(names));
+        result.put("status", allStreams.isEmpty() ? "idle" : "streaming");
+        result.put("activeStreams", allStreams.size());
+        result.put("streams", new ArrayList<>(allStreams));
+        result.put("streamOwnership", streamOwnership);
         String thumbBase = hlsCdnUrl != null && !hlsCdnUrl.isBlank()
                 ? hlsCdnUrl + "/hls/" : "/hls/";
         Map<String, String> thumbnails = new LinkedHashMap<>();
-        for (String name : names) {
+        for (String name : allStreams) {
             thumbnails.put(name, thumbBase + name + "/thumbnail.jpg");
         }
         result.put("thumbnails", thumbnails);
@@ -115,6 +130,16 @@ public class StreamController {
         body.put("status", "alive");
         body.put("activeStreams", server.activeStreamCount());
         return body;
+    }
+
+    @Get("/health/rtmp")
+    @Produces(MediaType.APPLICATION_JSON)
+    HttpResponse<Map<String, Object>> healthRtmp() {
+        boolean accepts = server.canAcceptStream();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("acceptsRtmp", accepts);
+        HttpStatus status = accepts ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE;
+        return HttpResponse.status(status).body(body);
     }
 
     @Get("/stats")

@@ -115,10 +115,10 @@ public class Server {
         return Map.copyOf(streams);
     }
 
-    @Scheduled(fixedDelay = "10s", initialDelay = "1s")
+    @Scheduled(fixedDelay = "5s", initialDelay = "1s")
     void heartbeatNode() {
         try {
-            nodeRegistry.heartbeat(streams.size());
+            nodeRegistry.heartbeat(streams.size(), streams.keySet());
         } catch (Exception e) {
             log.warn("Failed to heartbeat RTMP node: {}", e.getMessage());
         }

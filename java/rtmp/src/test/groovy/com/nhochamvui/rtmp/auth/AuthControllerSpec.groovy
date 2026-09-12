@@ -131,7 +131,7 @@ class AuthControllerSpec extends Specification {
     @MockBean(NodeRegistry)
     NodeRegistry nodeRegistry() {
         NodeRegistry mock = Mock(NodeRegistry)
-        mock.selectLeastLoadedNode() >> Optional.of(new IngestNode('node-1', 'rtmp://node-1/live', NodeStatus.ACTIVE, 0, 0, 1))
+        mock.selectLeastLoadedNode() >> Optional.of(new IngestNode('node-1', 'rtmp://node-1/live', NodeStatus.ACTIVE, 0, 0, 1, Set.of()))
         return mock
     }
 

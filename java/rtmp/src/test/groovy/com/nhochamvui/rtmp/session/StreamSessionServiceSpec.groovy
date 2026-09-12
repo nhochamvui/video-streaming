@@ -13,7 +13,7 @@ class StreamSessionServiceSpec extends Specification {
                 generator,
                 hasher,
                 repo,
-                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
+                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1, Set.of())),
                 "https://example.test/stream",
                 5,
                 1,
@@ -43,7 +43,7 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedGenerator("key", "playback"),
                 new StreamKeyHasher("01234567890123456789012345678901"),
                 repo,
-                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
+                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1, Set.of())),
                 "https://example.test/stream",
                 5,
                 1,
@@ -64,7 +64,7 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedGenerator("key", "playback"),
                 new StreamKeyHasher("01234567890123456789012345678901"),
                 repo,
-                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 18, 0, 1)),
+                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 18, 0, 1, Set.of())),
                 "https://example.test/stream",
                 5,
                 1,
@@ -101,7 +101,7 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedGenerator("unused", "unused"),
                 hasher,
                 repo,
-                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
+                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1, Set.of())),
                 "https://example.test/stream",
                 5,
                 1,
@@ -143,7 +143,7 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedGenerator("unused", "unused"),
                 hasher,
                 repo,
-                new FixedNodeRegistry(new IngestNode("node-selected-by-api", "rtmp://rtmp.example.test/live", NodeStatus.ACTIVE, 0, 0, 1)),
+                new FixedNodeRegistry(new IngestNode("node-selected-by-api", "rtmp://rtmp.example.test/live", NodeStatus.ACTIVE, 0, 0, 1, Set.of())),
                 "https://example.test/stream",
                 5,
                 1,
@@ -183,7 +183,7 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedGenerator("unused", "unused"),
                 hasher,
                 repo,
-                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
+                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1, Set.of())),
                 "https://example.test/stream",
                 5,
                 1,
@@ -223,7 +223,7 @@ class StreamSessionServiceSpec extends Specification {
                 new FixedGenerator("unused", "unused"),
                 hasher,
                 repo,
-                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1)),
+                new FixedNodeRegistry(new IngestNode("node-1", "rtmp://node-1/live", NodeStatus.ACTIVE, 0, 0, 1, Set.of())),
                 "https://example.test/stream",
                 5,
                 1,
@@ -289,7 +289,12 @@ class StreamSessionServiceSpec extends Specification {
         }
 
         @Override
-        void heartbeat(int activeStreams) {
+        void heartbeat(int activeStreams, Set<String> streamNames) {
+        }
+
+        @Override
+        Collection<IngestNode> listActiveNodes() {
+            [node]
         }
     }
 
