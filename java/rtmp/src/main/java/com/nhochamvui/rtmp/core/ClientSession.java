@@ -18,15 +18,15 @@ import java.io.*;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import static com.nhochamvui.rtmp.core.constants.Constant.*;
+import com.nhochamvui.rtmp.core.functions.MediaHandler;
+
 import static com.nhochamvui.rtmp.core.functions.MediaHandler.createFlvHeader;
-import static com.nhochamvui.rtmp.core.functions.MediaHandler.writeFlvTag;
 
 public class ClientSession {
 
@@ -57,8 +57,14 @@ public class ClientSession {
     private int inChunkSize = 128;
     private int outChunkSize = 128;
 
-    private final Map<Integer, RTMPHeader> prevHeaders = new HashMap<>();
-    private final Map<Integer, ByteBuffer> chunkPayload = new HashMap<>();
+    private static final int MAX_CSID = 64;
+    private final int[][] prevHeaders = new int[MAX_CSID][];
+    private final ByteBuffer[] chunkPayload = new ByteBuffer[MAX_CSID];
+    private final byte[] readBuf = new byte[4];
+    private final RTMPHeader reusableHeader = new RTMPHeader();
+    private final MediaHandler mediaHandler = new MediaHandler();
+    private byte[] chunkReadBuf = new byte[128];
+    private int chunkCounter;
 
     private int nextStreamId = 1;
     private String streamName;
@@ -113,14 +119,17 @@ public class ClientSession {
             MDC.put("publisherIp", connectionIp);
             log.info("[{}] RTMP connection accepted from {}", connectionId, connectionIp);
             handleHandShake();
-            prevHeaders.clear();
-            chunkPayload.clear();
+            Arrays.fill(prevHeaders, null);
+            Arrays.fill(chunkPayload, null);
 
             long lastActivityTime = System.currentTimeMillis();
+            chunkCounter = 0;
             while (!socket.isClosed() && !socket.isInputShutdown()) {
                 try {
                     handleChunkMessage();
-                    lastActivityTime = System.currentTimeMillis();
+                    if (++chunkCounter % 100 == 0) {
+                        lastActivityTime = System.currentTimeMillis();
+                    }
                 } catch (StreamClose e) {
                     break;
                 } catch (SocketTimeoutException e) {
@@ -236,21 +245,29 @@ public class ClientSession {
 
     private void handleChunkMessage() throws IOException, StreamClose {
         final RTMPHeader header = readRTMPHeader();
-        prevHeaders.put(header.basic.csid, header);
-        chunkPayload.putIfAbsent(header.basic.csid, ByteBuffer.allocateDirect(header.message.length));
-        ByteBuffer currentMessageData = chunkPayload.get(header.basic.csid);
-        assert currentMessageData != null;
+        int csid = header.basic.csid;
+        prevHeaders[csid] = new int[]{
+                header.message.timestamp, header.message.timestampDelta,
+                header.message.length, header.message.typeId, header.message.streamId
+        };
+        if (chunkPayload[csid] == null) {
+            chunkPayload[csid] = ByteBuffer.allocate(header.message.length);
+        }
+        ByteBuffer currentMessageData = chunkPayload[csid];
         if (currentMessageData.hasRemaining()) {
             int maxLengthForCurrentChunkData = Math.min(currentMessageData.remaining(), inChunkSize);
-            currentMessageData.put(inputStream.readNBytes(maxLengthForCurrentChunkData));
+            readExactly(chunkReadBuf, 0, maxLengthForCurrentChunkData);
+            currentMessageData.put(chunkReadBuf, 0, maxLengthForCurrentChunkData);
             if (!currentMessageData.hasRemaining()) {
                 currentMessageData.flip();
 
-                chunkPayload.remove(header.basic.csid);
-                List<Object> messages = new ArrayList<>();
+                chunkPayload[csid] = null;
                 switch (header.message.typeId) {
                     case 1:
                         this.inChunkSize = currentMessageData.getInt(0);
+                        if (this.inChunkSize > chunkReadBuf.length) {
+                            chunkReadBuf = new byte[this.inChunkSize];
+                        }
                         log.info("[{}] Process SetChunkSize message, new inChunkSize: {}", connectionId, this.inChunkSize);
                         if (throttle.enabled(server.activeStreamCount())) {
                             sleepMs("chunk-size", throttle.chunkSizeMs());
@@ -273,16 +290,17 @@ public class ClientSession {
                         break;
                     case 8:
                     case 9:
-                        byte[] payload = new byte[currentMessageData.remaining()];
-                        currentMessageData.get(0, payload);
+                        byte[] payload = currentMessageData.array();
+                        int payloadOffset = currentMessageData.arrayOffset() + currentMessageData.position();
+                        int payloadLength = currentMessageData.remaining();
 
                         if (header.message.typeId == 8) {
                             audioPackets++;
-                            audioBytes += payload.length;
+                            audioBytes += payloadLength;
                         } else {
                             videoPackets++;
-                            videoBytes += payload.length;
-                            if (payload.length >= 2 && (payload[1] & 0xFF) == 0) {
+                            videoBytes += payloadLength;
+                            if (payloadLength >= 2 && (payload[payloadOffset + 1] & 0xFF) == 0) {
                                 keyframeCount++;
                                 if (lastKeyframeTimestamp >= 0) {
                                     long interval = header.message.timestamp - lastKeyframeTimestamp;
@@ -315,7 +333,7 @@ public class ClientSession {
                         }
 
                         if (header.message.typeId == 9 && !sentFlvHeader) {
-                            if (payload.length < 2 || (payload[1] & 0xFF) != 0) {
+                            if (payloadLength < 2 || (payload[payloadOffset + 1] & 0xFF) != 0) {
                                 log.info("[{}] Skip first video frame: not a sequence header", connectionId);
                                 break;
                             }
@@ -326,8 +344,8 @@ public class ClientSession {
                             ffmpegProcess.getOutputStream().write(createFlvHeader());
                         }
 
-                        writeFlvTag(ffmpegProcess.getOutputStream(), (byte) header.message.typeId, header.message.timestamp, payload);
-                        bytesToFfmpeg += 11 + payload.length + 4;
+                        mediaHandler.writeFlvTag(ffmpegProcess.getOutputStream(), (byte) header.message.typeId, header.message.timestamp, payload, payloadOffset, payloadLength);
+                        bytesToFfmpeg += 11 + payloadLength + 4;
                         break;
                     case 15:
                         log.info("[{}] Process AMF3 Command message", connectionId);
@@ -337,6 +355,7 @@ public class ClientSession {
                         break;
                     case 20:
                         log.info("[{}] Process AMF0 Command message", connectionId);
+                        List<Object> messages = new ArrayList<>();
                         while (currentMessageData.hasRemaining()) {
                             final Object message = decodeAMF0CommandMessage(currentMessageData);
                             messages.add(message);
@@ -351,73 +370,79 @@ public class ClientSession {
     }
 
     private RTMPHeader readRTMPHeader() throws IOException {
-        final RTMPHeader rtmpHeader = new RTMPHeader();
+        final RTMPHeader rtmpHeader = reusableHeader;
         final Basic basicHeader = rtmpHeader.basic;
-        byte first = inputStream.readNBytes(1)[0];
+        final Message message = rtmpHeader.message;
+        readExactly(readBuf, 0, 1);
+        byte first = readBuf[0];
 
         basicHeader.fmt = (first & MASK_OF_8_BITS) >> 6;
 
         int csid = first & MASK_OF_6_BITS;
 
         if (csid == 0) {
-            csid = (inputStream.readNBytes(1)[0] & MASK_OF_8_BITS) + 64;
+            readExactly(readBuf, 0, 1);
+            csid = (readBuf[0] & MASK_OF_8_BITS) + 64;
         } else if (csid == 1) {
-            byte[] bytes = inputStream.readNBytes(2);
-            csid = ((bytes[0] & MASK_OF_8_BITS) + 64) + ((bytes[1] & MASK_OF_8_BITS) << 8);
+            readExactly(readBuf, 0, 2);
+            csid = ((readBuf[0] & MASK_OF_8_BITS) + 64) + ((readBuf[1] & MASK_OF_8_BITS) << 8);
         }
         basicHeader.csid = csid;
 
-        final Message message = rtmpHeader.message;
         switch (basicHeader.fmt) {
             case 0:
-                message.timestamp = readIntFrom3Bytes(inputStream);
+                message.timestamp = readIntFrom3Bytes();
                 if (message.timestamp == 0xFFFFFF) {
-                    message.timestamp = ByteBuffer.wrap(inputStream.readNBytes(4)).getInt();
+                    readExactly(readBuf, 0, 4);
+                    message.timestamp = readIntBE(readBuf);
                 }
-                message.length = readIntFrom3Bytes(inputStream);
+                message.length = readIntFrom3Bytes();
                 message.typeId = inputStream.read();
-                message.streamId = ByteBuffer.wrap(inputStream.readNBytes(4)).order(ByteOrder.LITTLE_ENDIAN).getInt();
+                readExactly(readBuf, 0, 4);
+                message.streamId = readIntLE(readBuf);
                 break;
             case 1:
-                message.timestampDelta = readIntFrom3Bytes(inputStream);
+                message.timestampDelta = readIntFrom3Bytes();
                 if (message.timestampDelta == 0xFFFFFF) {
-                    message.timestampDelta = ByteBuffer.wrap(inputStream.readNBytes(4)).getInt();
+                    readExactly(readBuf, 0, 4);
+                    message.timestampDelta = readIntBE(readBuf);
                 }
-                message.length = readIntFrom3Bytes(inputStream);
+                message.length = readIntFrom3Bytes();
                 message.typeId = inputStream.read();
-                RTMPHeader prev1 = prevHeaders.get(basicHeader.csid);
+                int[] prev1 = prevHeaders[csid];
                 if (prev1 != null) {
-                    message.streamId = prev1.message.streamId;
-                    message.timestamp = prev1.message.timestamp + message.timestampDelta;
+                    message.streamId = prev1[4];
+                    message.timestamp = prev1[0] + message.timestampDelta;
                 } else {
-                    throw new IOException(String.format("[%s] fmt=1 chunk for unknown csid=%d", connectionId, basicHeader.csid));
+                    throw new IOException(String.format("[%s] fmt=1 chunk for unknown csid=%d", connectionId, csid));
                 }
                 break;
             case 2:
-                message.timestampDelta = readIntFrom3Bytes(inputStream);
+                message.timestampDelta = readIntFrom3Bytes();
                 if (message.timestampDelta == 0xFFFFFF) {
-                    message.timestampDelta = ByteBuffer.wrap(inputStream.readNBytes(4)).getInt();
+                    readExactly(readBuf, 0, 4);
+                    message.timestampDelta = readIntBE(readBuf);
                 }
-                RTMPHeader prev2 = prevHeaders.get(basicHeader.csid);
+                int[] prev2 = prevHeaders[csid];
                 if (prev2 != null) {
-                    message.length = prev2.message.length;
-                    message.typeId = prev2.message.typeId;
-                    message.streamId = prev2.message.streamId;
-                    message.timestamp = prev2.message.timestamp + message.timestampDelta;
+                    message.length = prev2[2];
+                    message.typeId = prev2[3];
+                    message.streamId = prev2[4];
+                    message.timestamp = prev2[0] + message.timestampDelta;
                 } else {
-                    throw new IOException(String.format("[%s] fmt=2 chunk for unknown csid=%d", connectionId, basicHeader.csid));
+                    throw new IOException(String.format("[%s] fmt=2 chunk for unknown csid=%d", connectionId, csid));
                 }
                 break;
             case 3:
-                RTMPHeader prev3 = prevHeaders.get(basicHeader.csid);
+                int[] prev3 = prevHeaders[csid];
                 if (prev3 != null) {
-                    message.timestampDelta = prev3.message.timestampDelta;
-                    message.timestamp = prev3.message.timestamp;
-                    message.length = prev3.message.length;
-                    message.typeId = prev3.message.typeId;
-                    message.streamId = prev3.message.streamId;
+                    message.timestampDelta = prev3[1];
+                    message.timestamp = prev3[0];
+                    message.length = prev3[2];
+                    message.typeId = prev3[3];
+                    message.streamId = prev3[4];
                 } else {
-                    throw new IOException(String.format("[%s] fmt=3 chunk for unknown csid=%d", connectionId, basicHeader.csid));
+                    throw new IOException(String.format("[%s] fmt=3 chunk for unknown csid=%d", connectionId, csid));
                 }
                 break;
         }
@@ -577,7 +602,7 @@ public class ClientSession {
 
             case "deleteStream":
                 log.info("[{}] Stop stream, clear session", connectionId);
-                this.chunkPayload.clear();
+                Arrays.fill(this.chunkPayload, null);
                 throw new StreamClose();
 
             default:
@@ -1108,10 +1133,33 @@ public class ClientSession {
         return bytes;
     }
 
-    private static int readIntFrom3Bytes(InputStream inputStream) throws IOException {
-        byte[] threeBytes = inputStream.readNBytes(3);
-        byte[] fourBytes = new byte[4];
-        System.arraycopy(threeBytes, 0, fourBytes, 1, threeBytes.length);
-        return ByteBuffer.wrap(fourBytes).getInt();
+    private void readExactly(byte[] buf, int off, int len) throws IOException {
+        int read = 0;
+        while (read < len) {
+            int n = inputStream.read(buf, off + read, len - read);
+            if (n == -1) throw new IOException("End of stream");
+            read += n;
+        }
+    }
+
+    private int readIntFrom3Bytes() throws IOException {
+        readExactly(readBuf, 1, 3);
+        return ((readBuf[1] & 0xFF) << 16)
+             | ((readBuf[2] & 0xFF) << 8)
+             |  (readBuf[3] & 0xFF);
+    }
+
+    private static int readIntBE(byte[] b) {
+        return ((b[0] & 0xFF) << 24)
+             | ((b[1] & 0xFF) << 16)
+             | ((b[2] & 0xFF) << 8)
+             |  (b[3] & 0xFF);
+    }
+
+    private static int readIntLE(byte[] b) {
+        return  (b[0] & 0xFF)
+             | ((b[1] & 0xFF) << 8)
+             | ((b[2] & 0xFF) << 16)
+             | ((b[3] & 0xFF) << 24);
     }
 }
