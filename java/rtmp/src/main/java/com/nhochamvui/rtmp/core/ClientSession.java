@@ -16,6 +16,7 @@ import org.slf4j.MDC;
 
 import java.io.*;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
@@ -115,18 +116,16 @@ public class ClientSession {
             prevHeaders.clear();
             chunkPayload.clear();
 
+            long lastActivityTime = System.currentTimeMillis();
             while (!socket.isClosed() && !socket.isInputShutdown()) {
-                if (inputStream.available() > 0) {
-                    try {
-                        handleChunkMessage();
-                    } catch (StreamClose e) {
-                        break;
-                    }
-                } else {
-                    try {
-                        Thread.sleep(10);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
+                try {
+                    handleChunkMessage();
+                    lastActivityTime = System.currentTimeMillis();
+                } catch (StreamClose e) {
+                    break;
+                } catch (SocketTimeoutException e) {
+                    if (System.currentTimeMillis() - lastActivityTime > 120_000) {
+                        log.info("[{}] No data for 120s, closing idle connection", connectionId);
                         break;
                     }
                 }
