@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -519,7 +518,6 @@ func (s *Segmenter) tryCaptureThumbnail(avccBody []byte) {
 
 	go func() {
 		if err := captureThumbnail(s.outDir, s.videoCodec.SPS, s.videoCodec.PPS, avccBody); err != nil {
-			log.Printf("thumbnail capture failed: %v", err)
 			return
 		}
 		if s.uploader != nil {

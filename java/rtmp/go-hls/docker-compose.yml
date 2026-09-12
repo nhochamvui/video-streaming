@@ -1,0 +1,22 @@
+services:
+  rtmp-hls:
+    build: .
+    container_name: rtmp-go
+    volumes:
+      - ./hls:/app/hls
+    ports:
+      - "1935:1935"
+    restart: unless-stopped
+    networks:
+      - rtmp-net
+    deploy:
+      resources:
+        limits:
+          cpus: '1'     # Hard limit: Max 50% of a single CPU core
+          memory: 312M     # Hard limit: Max 512 Megabytes of RAM
+        reservations:
+          cpus: '0.5'     # Soft limit: Minimum guaranteed CPU
+          memory: 25M     # Soft limit: Minimum guaranteed RAM
+
+networks:
+  rtmp-net:

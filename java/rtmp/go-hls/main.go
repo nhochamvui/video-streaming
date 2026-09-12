@@ -1,3 +1,5 @@
+//go:build !rtmp
+
 package main
 
 import (
