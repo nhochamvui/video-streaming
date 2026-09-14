@@ -53,6 +53,8 @@ public class ClientSession {
     private final String connectionIp;
     private final long connectionStartTime;
     private final RtmpThrottleConfig throttle;
+    private final SegmenterDaemon segmenterDaemon;
+    private SegmenterClient segmenterClient;
 
     private int inChunkSize = 128;
     private int outChunkSize = 128;
@@ -93,7 +95,7 @@ public class ClientSession {
     private volatile String ffmpegSpeed;
     private volatile boolean streaming;
 
-    public ClientSession(Socket socket, Server server, StreamSessionService streamSessionService, SafePlaybackPath safePlaybackPath, String serverId, String hlsBucket, String hlsRegion, String hlsCdnUrl, RtmpThrottleConfig throttle) throws IOException {
+    public ClientSession(Socket socket, Server server, StreamSessionService streamSessionService, SafePlaybackPath safePlaybackPath, String serverId, String hlsBucket, String hlsRegion, String hlsCdnUrl, RtmpThrottleConfig throttle, SegmenterDaemon segmenterDaemon) throws IOException {
         this.socket = socket;
         this.server = server;
         this.streamSessionService = streamSessionService;
@@ -103,6 +105,7 @@ public class ClientSession {
         this.hlsRegion = hlsRegion;
         this.hlsCdnUrl = hlsCdnUrl;
         this.throttle = throttle;
+        this.segmenterDaemon = segmenterDaemon;
         this.socket.setTcpNoDelay(true);
         this.socket.setSoTimeout(5000);
         this.connectionStartTime = System.currentTimeMillis();
@@ -320,15 +323,14 @@ public class ClientSession {
                         maxSeenTimestamp = Math.max(maxSeenTimestamp, header.message.timestamp);
                         lastMediaTimestamp = header.message.timestamp;
 
-                        if (ffmpegProcess == null) {
-                            startFfmpeg();
+                        if (segmenterClient == null && ffmpegProcess == null) {
+                            startSegmenter();
                         }
 
-                        if (!ffmpegProcess.isAlive()) {
-                            String error = new String(ffmpegProcess.getErrorStream().readAllBytes());
-                            log.warn("[{}] FFmpeg exited: {}, error: {}", connectionId, ffmpegProcess.exitValue(), error);
+                        if (!segmenterAlive()) {
+                            log.warn("[{}] Segmenter not alive: {}", connectionId, segmenterError());
                             sentFlvHeader = false;
-                            ffmpegProcess = null;
+                            resetSegmenter();
                             break;
                         }
 
@@ -341,10 +343,10 @@ public class ClientSession {
 
                         if (!sentFlvHeader) {
                             sentFlvHeader = true;
-                            ffmpegProcess.getOutputStream().write(createFlvHeader());
+                            segmenterOut().write(createFlvHeader());
                         }
 
-                        mediaHandler.writeFlvTag(ffmpegProcess.getOutputStream(), (byte) header.message.typeId, header.message.timestamp, payload, payloadOffset, payloadLength);
+                        mediaHandler.writeFlvTag(segmenterOut(), (byte) header.message.typeId, header.message.timestamp, payload, payloadOffset, payloadLength);
                         bytesToFfmpeg += 11 + payloadLength + 4;
                         break;
                     case 15:
@@ -863,7 +865,64 @@ public class ClientSession {
 
     // ─── HLS / FFmpeg ────────────────────────────────────────────
 
-    private void startFfmpeg() throws IOException {
+    private OutputStream segmenterOut() throws IOException {
+        return segmenterClient != null ? segmenterClient.stream() : ffmpegProcess.getOutputStream();
+    }
+
+    private boolean segmenterAlive() {
+        return segmenterClient != null
+                ? !segmenterClient.isClosed()
+                : (ffmpegProcess != null && ffmpegProcess.isAlive());
+    }
+
+    private String segmenterError() {
+        return segmenterClient != null ? segmenterClient.errorMessage() : "segmenter process exited";
+    }
+
+    private void resetSegmenter() {
+        segmenterClient = null;
+        ffmpegProcess = null;
+    }
+
+    private void onSegmenterProgress(String line) {
+        try {
+            if (line.contains("fps=")) {
+                int fpsIdx = line.indexOf("fps=");
+                ffmpegFps = line.substring(fpsIdx + 4).trim().split("\\s+")[0];
+                int brIdx = line.indexOf("bitrate=");
+                if (brIdx >= 0) {
+                    ffmpegBitrate = line.substring(brIdx + 8).trim().split("\\s+")[0];
+                }
+                int spIdx = line.indexOf("speed=");
+                if (spIdx >= 0) {
+                    ffmpegSpeed = line.substring(spIdx + 6).trim().split("\\s+")[0];
+                }
+            }
+        } catch (Exception ignore) {
+        }
+    }
+
+    private void onSegmenterError(String message) {
+        log.warn("[{}] Segmenter reported error: {}", connectionId, message);
+    }
+
+    private void startSegmenter() throws IOException {
+        if (segmenterDaemon != null && segmenterDaemon.isDaemonMode()) {
+            try {
+                new File(hlsBaseDir + "/hd").mkdirs();
+                writeMasterPlaylist();
+                this.segmenterClient = segmenterDaemon.open(hlsBaseDir + "/hd", this::onSegmenterProgress, this::onSegmenterError);
+                log.info("[{}] Using shared segmenter daemon for stream {}", connectionId, streamName);
+                return;
+            } catch (Exception e) {
+                log.warn("[{}] Segmenter daemon unavailable ({}), falling back to per-process mode", connectionId, e.getMessage());
+                this.segmenterClient = null;
+            }
+        }
+        startSegmenterProcess();
+    }
+
+    private void startSegmenterProcess() throws IOException {
         new File(hlsBaseDir + "/hd").mkdirs();
         writeMasterPlaylist();
 
@@ -1075,7 +1134,11 @@ public class ClientSession {
     private void cleanup() {
         streaming = false;
         logStats();
-        if (ffmpegProcess != null) {
+        if (segmenterClient != null) {
+            segmenterClient.close();
+            segmenterClient = null;
+            sentFlvHeader = false;
+        } else if (ffmpegProcess != null) {
             try {
                 ffmpegProcess.getOutputStream().close();
             } catch (IOException ignored) {

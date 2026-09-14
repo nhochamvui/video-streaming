@@ -34,6 +34,7 @@ public class Server {
     private final String hlsCdnUrl;
     private final int maxActiveStreams;
     private final RtmpThrottleConfig throttle;
+    private final SegmenterDaemon segmenterDaemon;
 
     public Server(
             StreamSessionService streamSessionService,
@@ -48,7 +49,8 @@ public class Server {
             @Value("${rtmp.throttle.min-streams:18}") int throttleMinStreams,
             @Value("${rtmp.throttle.handshake-ms:0}") long throttleHandshakeMs,
             @Value("${rtmp.throttle.chunk-size-ms:0}") long throttleChunkSizeMs,
-            @Value("${rtmp.throttle.publish-ms:0}") long throttlePublishMs
+            @Value("${rtmp.throttle.publish-ms:0}") long throttlePublishMs,
+            SegmenterDaemon segmenterDaemon
     ) {
         this.streamSessionService = streamSessionService;
         this.safePlaybackPath = safePlaybackPath;
@@ -60,6 +62,7 @@ public class Server {
         this.hlsCdnUrl = hlsCdnUrl;
         this.maxActiveStreams = maxActiveStreams;
         this.throttle = new RtmpThrottleConfig(throttleMinStreams, throttleHandshakeMs, throttleChunkSizeMs, throttlePublishMs);
+        this.segmenterDaemon = segmenterDaemon;
         log.info("RTMP Server initialized | serverId={} | port={} | hlsBucket={} | hlsRegion={} | maxActiveStreams={} | throttle={}", this.serverId, port, hlsBucket, hlsRegion, maxActiveStreams, this.throttle);
     }
 
@@ -72,7 +75,7 @@ public class Server {
                     Socket socket = serverSocket.accept();
                     Thread.ofVirtual().start(() -> {
                         try (socket) {
-                            new ClientSession(socket, Server.this, streamSessionService, safePlaybackPath, serverId, hlsBucket, hlsRegion, hlsCdnUrl, throttle).run();
+                            new ClientSession(socket, Server.this, streamSessionService, safePlaybackPath, serverId, hlsBucket, hlsRegion, hlsCdnUrl, throttle, segmenterDaemon).run();
                         } catch (Exception e) {
                             log.error("ClientSession fatal error", e);
                         }

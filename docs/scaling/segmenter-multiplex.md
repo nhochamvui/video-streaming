@@ -1,6 +1,6 @@
 # Segmenter multiplexing — one `hls-segmenter` process per node
 
-Status: **proposed — awaiting approval**
+Status: **implemented** (daemon + client) - measure before/after on the target node.
 Branch: `feat/segmenter-multiplex`
 
 ## Goal
