@@ -109,6 +109,34 @@ Per-stream values (outDir + the three HLS params) come from the handshake.
 4. Measure before/after on the same instance type: process count, RSS, streams-per-node at ~95% CPU.
    Re-tune `RTMP_MAX_ACTIVE_STREAMS_PER_NODE` from the result.
 
+## Baseline measurement (before)
+
+A harness ships on this branch to quantify the current per-process overhead:
+`java/rtmp/scripts/segmenter-bench.ps1` (Windows) and `segmenter-bench.sh` (Linux/EC2).
+It feeds N concurrent streams into N `hls-segmenter` processes and samples **only** the
+segmenter processes (RSS, threads, CPU); results land in `build/bench/bench-results-*.json`.
+
+Indicative run (Windows dev box, 1280x720 @ 2500k, realtime-paced):
+
+| streams | procs | avg RSS / proc | total RSS | threads / proc | total threads | cores used |
+|---|---|---|---|---|---|---|
+| 4 | 4 | ~32 MB | ~128 MB | ~9.5 | 38 | ~0.01 |
+| 8 | 8 | ~30 MB | ~242 MB | ~9 | 72 | ~0.02 |
+
+Findings:
+
+- Overhead is **~30 MB RSS and ~9 threads per stream**, growing linearly with stream count.
+- At the current cap of 18 streams that is **~550 MB of segmenter RSS** — which already
+exceeds the app task's 384 MiB memory limit. So the per-node budget looks **memory-bound,
+not CPU-bound** (consistent with the earlier "bound streams per node / prevent OOM" commits),
+and this is exactly what the multiplex removes.
+- Segmenter CPU under realtime pacing is tiny (~0.02 cores for 8 streams): the heavy CPU sits
+  in the encoder on the streamer side and in the JVM. So the expected multiplex win is
+  **memory + threads first, CPU second**.
+
+Caveat: indicative numbers from a Windows dev box. Run `segmenter-bench.sh` on the target EC2
+node (and again after the change) for the authoritative before/after comparison.
+
 ## Risks & mitigations
 
 | Risk | Mitigation |
