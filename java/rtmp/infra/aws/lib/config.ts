@@ -6,6 +6,7 @@ export type DeployMode = 'cheap' | 'managed';
 export interface InfraConfig {
   readonly deployMode: DeployMode;
   readonly appImage: string;
+  readonly routerImage: string;
   readonly instanceTypeName: string;
   readonly instanceType: InstanceType;
   readonly desiredAppCount: number;
@@ -32,6 +33,7 @@ export function getConfig(app: cdk.App): InfraConfig {
   return {
     deployMode,
     appImage: readString(app, 'appImage', 'public.ecr.aws/docker/library/eclipse-temurin:21-jre'),
+    routerImage: readString(app, 'routerImage', ''),
     instanceTypeName,
     instanceType: new InstanceType(instanceTypeName),
     desiredAppCount,

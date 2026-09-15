@@ -1,0 +1,43 @@
+plugins {
+    id("java")
+    id("application")
+    id("org.graalvm.buildtools.native") version "0.10.3"
+}
+
+group = "com.nhochamvui.rtmp"
+version = "1.0.0"
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+application {
+    mainClass = "com.nhochamvui.rtmp.router.RouterApplication"
+}
+
+dependencies {
+    testImplementation(platform("org.junit:junit-bom:5.10.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events("passed", "failed", "skipped")
+    }
+}
+
+graalvmNative {
+    binaries {
+        main {
+            imageName = "rtmp-router"
+            buildArgs.addAll("--no-fallback", "-O2")
+        }
+    }
+}

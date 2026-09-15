@@ -3,8 +3,9 @@ package com.nhochamvui.rtmp.session;
 import io.micronaut.context.annotation.Value;
 import jakarta.inject.Singleton;
 
+import com.sun.management.OperatingSystemMXBean;
+
 import java.lang.management.ManagementFactory;
-import java.lang.management.OperatingSystemMXBean;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -19,6 +20,7 @@ public class RedisNodeRegistry implements NodeRegistry {
     private static final int NODE_TTL_SECONDS = 30;
 
     private final RedisProvider redisProvider;
+    private final NodeAddressResolver nodeAddressResolver;
     private final String serverId;
     private final String endpoint;
     private final String nodeStatus;
@@ -26,10 +28,12 @@ public class RedisNodeRegistry implements NodeRegistry {
     public RedisNodeRegistry(
             RedisProvider redisProvider,
             ServerIdentity serverIdentity,
+            NodeAddressResolver nodeAddressResolver,
             @Value("${rtmp.endpoint}") String endpoint,
             @Value("${rtmp.node-status:ACTIVE}") String nodeStatus
     ) {
         this.redisProvider = redisProvider;
+        this.nodeAddressResolver = nodeAddressResolver;
         this.serverId = serverIdentity.serverId();
         this.endpoint = endpoint;
         this.nodeStatus = nodeStatus;
@@ -53,9 +57,11 @@ public class RedisNodeRegistry implements NodeRegistry {
         Map<String, String> values = new HashMap<>();
         values.put("serverId", serverId);
         values.put("endpoint", endpoint);
+        values.put("host", nodeAddressResolver.resolve());
         values.put("status", nodeStatus);
         values.put("activeStreams", Integer.toString(activeStreams));
         values.put("cpuLoad", Double.toString(cpuLoad()));
+        values.put("memPct", Double.toString(memPct()));
         values.put("streamNames", String.join(",", streamNames));
         values.put("lastHeartbeatAt", Long.toString(System.currentTimeMillis()));
         redisProvider.withCommands(redis -> {
@@ -104,7 +110,19 @@ public class RedisNodeRegistry implements NodeRegistry {
     }
 
     private double cpuLoad() {
-        OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
+        var os = ManagementFactory.getOperatingSystemMXBean();
         return os.getSystemLoadAverage();
+    }
+
+    private double memPct() {
+        var os = ManagementFactory.getOperatingSystemMXBean();
+        if (os instanceof OperatingSystemMXBean system) {
+            long total = system.getTotalMemorySize();
+            if (total > 0) {
+                long used = total - system.getFreeMemorySize();
+                return Math.max(0, Math.min(100, used * 100.0 / total));
+            }
+        }
+        return -1;
     }
 }

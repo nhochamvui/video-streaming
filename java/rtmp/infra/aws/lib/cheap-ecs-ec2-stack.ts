@@ -180,6 +180,14 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
       `arn:aws:ssm:${Stack.of(scope).region}:${Stack.of(scope).account}:parameter/rtmp/demo/grafana-cloud-*`
     ]
   }));
+  proxyRole.addToPolicy(new PolicyStatement({
+    actions: ['ecr:GetAuthorizationToken'],
+    resources: ['*']
+  }));
+  proxyRole.addToPolicy(new PolicyStatement({
+    actions: ['ecr:BatchCheckLayerAvailability', 'ecr:GetDownloadUrlForLayer', 'ecr:BatchGetImage'],
+    resources: [`arn:aws:ecr:${Stack.of(scope).region}:${Stack.of(scope).account}:repository/rtmp-router`]
+  }));
 
   const scaleOutQueue = new sqs.Queue(scope, 'ScaleOutQueue', {
     queueName: 'rtmp-scale-out',
@@ -310,20 +318,13 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     '  PRIVATE_IPS="$(aws ec2 describe-instances --region "$REGION" --instance-ids $INSTANCE_IDS --query \'Reservations[].Instances[?State.Name==`running`].PrivateIpAddress\' --output text)"',
     'fi',
     'HTTP_LIST="$(mktemp)"',
-    'TCP_LIST="$(mktemp)"',
     'if [ -z "$PRIVATE_IPS" ]; then',
     '  echo "          - url: http://127.0.0.1:65535" > "$HTTP_LIST"',
-    '  echo "          - address: 127.0.0.1:65535" > "$TCP_LIST"',
     'else',
     '  for ip in $PRIVATE_IPS; do echo "          - url: http://$ip:8888" >> "$HTTP_LIST"; done',
-    '  for ip in $PRIVATE_IPS; do',
-    '    if curl -fsS --max-time 3 "http://$ip:8888/health/rtmp" >/dev/null 2>&1; then',
-    '      echo "          - address: $ip:1935" >> "$TCP_LIST"',
-    '    fi',
-    '  done',
     'fi',
-    `sed -e '/^#HTTP_SERVERS$/r '"$HTTP_LIST" -e '/^#HTTP_SERVERS$/d' -e '/^#TCP_SERVERS$/r '"$TCP_LIST" -e '/^#TCP_SERVERS$/d' "$BASE_FILE" > "$TMP_FILE"`,
-    'rm -f "$HTTP_LIST" "$TCP_LIST"',
+    `sed -e '/^#HTTP_SERVERS$/r '"$HTTP_LIST" -e '/^#HTTP_SERVERS$/d' "$BASE_FILE" > "$TMP_FILE"`,
+    'rm -f "$HTTP_LIST"',
     'if ! cmp -s "$TMP_FILE" "$FINAL_FILE"; then mv "$TMP_FILE" "$FINAL_FILE"; else rm "$TMP_FILE"; fi',
     '/usr/local/bin/render-alloy-config "$PRIVATE_IPS"',
     'FREE_SLOTS=0',
@@ -374,6 +375,20 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     'systemctl daemon-reload',
     'systemctl enable --now traefik-backends.timer'
   );
+
+  if (config.routerImage) {
+    const registry = `${Stack.of(scope).account}.dkr.ecr.${Stack.of(scope).region}.amazonaws.com`;
+    proxyUserData.addCommands(
+      `aws ecr get-login-password --region ${Stack.of(scope).region} | docker login --username AWS --password-stdin ${registry}`,
+      'docker run -d --name rtmp-router --restart unless-stopped --network host '
+        + '-e REDIS_URI=redis://127.0.0.1:6379 '
+        + '-e RTMP_ROUTER_LISTEN=0.0.0.0:1935 '
+        + '-e RTMP_ROUTER_NODE_PORT=1935 '
+        + '-e RTMP_ROUTER_MAX_STREAMS_PER_NODE=18 '
+        + '-e RTMP_ROUTER_ADMIN_LISTEN=127.0.0.1:9100 '
+        + config.routerImage
+    );
+  }
 
   const proxyInstance = new Instance(scope, 'ProxyInstance', {
     vpc,
