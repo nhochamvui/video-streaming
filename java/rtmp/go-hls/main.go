@@ -46,7 +46,16 @@ func main() {
 
 	// Daemon mode: one process serves many streams (one connection each).
 	if *listen != "" {
-		if err := serve(*listen, cfg, uploader); err != nil {
+		// A nil *s3Uploader assigned straight into the Uploader parameter is a
+		// typed-nil interface (non-nil interface holding a nil pointer), so
+		// serve/handleConn would treat local-only mode as S3-enabled and the
+		// first upload would panic on the nil receiver. Keep the interface
+		// value untyped nil instead.
+		var up Uploader
+		if uploader != nil {
+			up = uploader
+		}
+		if err := serve(*listen, cfg, up); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon error: %v\n", err)
 			os.Exit(1)
 		}

@@ -144,3 +144,42 @@ func TestDaemonRejectsInvalidHandshake(t *testing.T) {
 		t.Fatalf("expected E, got %q", line)
 	}
 }
+
+// TestDaemonTypedNilUploaderDoesNotPanic regression-tests the typed-nil trap:
+// main used to pass its concrete nil *s3Uploader straight into serve, producing
+// a non-nil Uploader interface that handleConn attached to every segmenter; the
+// first upload (init.mp4) then sent on the nil receiver's queue and crashed the
+// daemon. With no --s3-bucket (local-only mode) the daemon must serve a stream
+// through segment rotation and finish cleanly.
+func TestDaemonTypedNilUploaderDoesNotPanic(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	// Reproduce the wiring that used to reach serve in main: an uninitialized
+	// *s3Uploader stored in the Uploader interface is a typed nil (the
+	// interface itself compares non-nil).
+	var typedNil *s3Uploader
+	var up Uploader = typedNil
+	cfg := streamConfig{TargetDurMS: 2000, ListSize: 10, DeleteThreshold: 1}
+	go func() { _ = serveListener(ln, cfg, up) }()
+
+	// ~5s of A/V at hlsTime=2 => at least two mid-stream rotations, so the
+	// uploadSegment path that used to panic is exercised.
+	dir := filepath.Join(t.TempDir(), "hd")
+	var wg sync.WaitGroup
+	wg.Add(1)
+	runStream(t, ln.Addr().String(), dir, buildTestFLV(150), &wg)
+	wg.Wait()
+
+	// runStream already asserts a clean "D" ending; also prove the stream
+	// actually rotated so the regression test cannot silently pass weakly.
+	if _, err := os.Stat(filepath.Join(dir, "output_1.m4s")); err != nil {
+		t.Errorf("expected rotated segment output_1.m4s in %s: %v", dir, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "output.m3u8")); err != nil {
+		t.Errorf("expected playlist in %s: %v", dir, err)
+	}
+}

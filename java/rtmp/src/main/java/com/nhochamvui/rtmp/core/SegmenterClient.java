@@ -58,9 +58,11 @@ public final class SegmenterClient implements Closeable {
     }
 
     private static SocketChannel openChannel(String address) throws IOException {
-        if (address.startsWith("unix:")) {
+        String unixPath = address.startsWith("unix:") ? address.substring("unix:".length())
+                : (!address.startsWith("tcp:") && address.contains("/") ? address : null);
+        if (unixPath != null) {
             SocketChannel ch = SocketChannel.open(StandardProtocolFamily.UNIX);
-            ch.connect(UnixDomainSocketAddress.of(address.substring("unix:".length())));
+            ch.connect(UnixDomainSocketAddress.of(unixPath));
             return ch;
         }
         String rest = address.startsWith("tcp:") ? address.substring("tcp:".length()) : address;

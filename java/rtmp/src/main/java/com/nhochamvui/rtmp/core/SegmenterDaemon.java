@@ -38,14 +38,25 @@ public class SegmenterDaemon {
     public SegmenterDaemon(
             @Value("${rtmp.segmenter.mode:daemon}") String mode,
             @Value("${rtmp.segmenter.command:hls-segmenter}") String command,
-            @Value("${rtmp.segmenter.listen:unix:/tmp/hls-segmenter.sock}") String listen,
+            @Value("${rtmp.segmenter.listen:/tmp/hls-segmenter.sock}") String listen,
             @Value("${rtmp.hls.bucket:}") String s3Bucket,
             @Value("${rtmp.hls.region:}") String s3Region) {
         this.mode = mode;
         this.command = command;
-        this.listen = listen;
+        this.listen = normalizeListen(listen);
         this.s3Bucket = s3Bucket;
         this.s3Region = s3Region;
+    }
+
+    private static String normalizeListen(String value) {
+        if (value == null || value.isBlank()) {
+            return "tcp:127.0.0.1:9977";
+        }
+        if (value.startsWith("unix:") || value.startsWith("tcp:")) {
+            return value;
+        }
+        // A bare path means a Unix domain socket.
+        return value.contains("/") ? "unix:" + value : "tcp:" + value;
     }
 
     public boolean isDaemonMode() {

@@ -136,7 +136,13 @@ func (u *s3Uploader) DeleteAll(prefix string) {
 	u.enqueue(uploadTask{kind: deletePrefix, prefix: prefix})
 }
 
+// enqueue queues a task for the worker. A nil receiver is a defensive no-op:
+// a typed-nil *s3Uploader stored in the Uploader interface must behave as
+// local-only mode (drop the task) instead of panicking on its nil queue.
 func (u *s3Uploader) enqueue(task uploadTask) {
+	if u == nil {
+		return
+	}
 	u.queue <- task
 }
 

@@ -64,6 +64,9 @@ func parseListen(s string) (string, string) {
 	if v, ok := strings.CutPrefix(s, "tcp:"); ok {
 		return "tcp", v
 	}
+	if strings.Contains(s, "/") {
+		return "unix", s // bare path => Unix domain socket
+	}
 	return "tcp", s
 }
 
