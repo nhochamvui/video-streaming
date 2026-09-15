@@ -108,8 +108,8 @@ public class ClientSession {
         this.connectionStartTime = System.currentTimeMillis();
         this.connectionIp = socket.getInetAddress().getHostAddress();
         this.connectionId = connectionIp + "-" + connectionStartTime;
-        this.inputStream = socket.getInputStream();
-        this.outputStream = socket.getOutputStream();
+        this.inputStream = new BufferedInputStream(socket.getInputStream(), 16384);
+        this.outputStream = new BufferedOutputStream(socket.getOutputStream(), 16384);
     }
 
     public void run() {
@@ -1077,6 +1077,7 @@ public class ClientSession {
         logStats();
         if (ffmpegProcess != null) {
             try {
+                mediaHandler.flush(ffmpegProcess.getOutputStream());
                 ffmpegProcess.getOutputStream().close();
             } catch (IOException ignored) {
             }

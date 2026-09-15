@@ -1,5 +1,7 @@
 package com.nhochamvui.rtmp.session;
 
+import io.lettuce.core.KeyScanCursor;
+import io.lettuce.core.ScanArgs;
 import io.micronaut.context.annotation.Value;
 import jakarta.inject.Singleton;
 
@@ -42,7 +44,8 @@ public class RedisNodeRegistry implements NodeRegistry {
     @Override
     public Optional<IngestNode> selectLeastLoadedNode() {
         return redisProvider.withCommands(redis -> {
-            Optional<IngestNode> selected = redis.keys("server:*").stream()
+            List<String> allKeys = scanServerKeys(redis);
+            Optional<IngestNode> selected = allKeys.stream()
                     .map(key -> toNode(redis.hgetall(key)))
                     .filter(Optional::isPresent)
                     .map(Optional::get)
@@ -74,7 +77,8 @@ public class RedisNodeRegistry implements NodeRegistry {
     @Override
     public Collection<IngestNode> listActiveNodes() {
         return redisProvider.withCommands(redis -> {
-            List<IngestNode> nodes = redis.keys("server:*").stream()
+            List<String> allKeys = scanServerKeys(redis);
+            List<IngestNode> nodes = allKeys.stream()
                     .map(key -> toNode(redis.hgetall(key)))
                     .filter(Optional::isPresent)
                     .map(Optional::get)
@@ -109,6 +113,16 @@ public class RedisNodeRegistry implements NodeRegistry {
         }
     }
 
+    private List<String> scanServerKeys(io.lettuce.core.api.sync.RedisCommands<String, String> redis) {
+        java.util.ArrayList<String> keys = new java.util.ArrayList<>();
+        KeyScanCursor<String> cursor = redis.scan(ScanArgs.Builder.matches("server:*").limit(100));
+        while (!cursor.isFinished()) {
+            keys.addAll(cursor.getKeys());
+            cursor = redis.scan(cursor);
+        }
+        return keys;
+    }
+
     private double cpuLoad() {
         var os = ManagementFactory.getOperatingSystemMXBean();
         return os.getSystemLoadAverage();
@@ -116,7 +130,7 @@ public class RedisNodeRegistry implements NodeRegistry {
 
     private double memPct() {
         var os = ManagementFactory.getOperatingSystemMXBean();
-        if (os instanceof OperatingSystemMXBean system) {
+        if (os instanceof com.sun.management.OperatingSystemMXBean system) {
             long total = system.getTotalMemorySize();
             if (total > 0) {
                 long used = total - system.getFreeMemorySize();

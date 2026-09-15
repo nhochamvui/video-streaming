@@ -1,5 +1,7 @@
 package com.nhochamvui.rtmp.session;
 
+import io.lettuce.core.KeyScanCursor;
+import io.lettuce.core.ScanArgs;
 import io.lettuce.core.ScriptOutputType;
 import jakarta.inject.Singleton;
 
@@ -11,17 +13,6 @@ import java.util.Optional;
 @Singleton
 public class LettuceStreamSessionRepository implements StreamSessionRepository {
     private static final String KEY_PREFIX = "publish-session:";
-    private static final String COUNT_SCRIPT = """
-            local keys = redis.call('KEYS', KEYS[1])
-            local count = 0
-            for _, key in ipairs(keys) do
-              if redis.call('HGET', key, 'requestedIp') == ARGV[1]
-                 and redis.call('HGET', key, 'status') == ARGV[2] then
-                count = count + 1
-              end
-            end
-            return count
-            """;
     private static final String VALIDATE_SCRIPT = """
             local key = KEYS[1]
             local serverId = ARGV[1]
@@ -137,9 +128,23 @@ public class LettuceStreamSessionRepository implements StreamSessionRepository {
 
     @Override
     public long countByRequestedIpAndStatus(String requestedIp, StreamSessionStatus status) {
-        Long count = redisProvider.withCommands(redis -> redis.eval(COUNT_SCRIPT, ScriptOutputType.INTEGER,
-                new String[]{KEY_PREFIX + "*"}, nullToEmpty(requestedIp), status.name()));
-        return count == null ? 0 : count;
+        String targetIp = nullToEmpty(requestedIp);
+        String targetStatus = status.name();
+        return redisProvider.withCommands(redis -> {
+            long count = 0;
+            KeyScanCursor<String> cursor = redis.scan(ScanArgs.Builder.matches(KEY_PREFIX + "*").limit(100));
+            while (!cursor.isFinished()) {
+                for (String key : cursor.getKeys()) {
+                    Map<String, String> hash = redis.hgetall(key);
+                    if (targetIp.equals(hash.getOrDefault("requestedIp", ""))
+                            && targetStatus.equals(hash.getOrDefault("status", ""))) {
+                        count++;
+                    }
+                }
+                cursor = redis.scan(cursor);
+            }
+            return count;
+        });
     }
 
     private Optional<StreamSession> toSession(String lookupKey, List<String> values) {

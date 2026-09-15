@@ -14,6 +14,7 @@ public class MediaHandler {
 
     private final byte[] tagHeader = new byte[11];
     private final byte[] pvsBuf = new byte[4];
+    private int tagsSinceFlush;
 
     public void writeFlvTag(OutputStream outputStream,
                             byte tagType, int timestamp,
@@ -40,6 +41,15 @@ public class MediaHandler {
         pvsBuf[3] = (byte) (previousTagSize & 0xFF);
 
         outputStream.write(pvsBuf);
+
+        if (++tagsSinceFlush >= 5) {
+            tagsSinceFlush = 0;
+            outputStream.flush();
+        }
+    }
+
+    public void flush(OutputStream outputStream) throws IOException {
+        tagsSinceFlush = 0;
         outputStream.flush();
     }
 
