@@ -380,13 +380,15 @@ export function createCheapInfra(scope: Construct, config: InfraConfig): CheapIn
     const registry = `${Stack.of(scope).account}.dkr.ecr.${Stack.of(scope).region}.amazonaws.com`;
     proxyUserData.addCommands(
       `aws ecr get-login-password --region ${Stack.of(scope).region} | docker login --username AWS --password-stdin ${registry}`,
+      `ROUTER_IMAGE="${config.routerImage}"`,
+      'for i in $(seq 1 10); do docker pull "$ROUTER_IMAGE" && break; echo "Attempt $i: image not ready, waiting 30s..." >&2; sleep 30; done',
       'docker run -d --name rtmp-router --restart unless-stopped --network host '
         + '-e REDIS_URI=redis://127.0.0.1:6379 '
         + '-e RTMP_ROUTER_LISTEN=0.0.0.0:1935 '
         + '-e RTMP_ROUTER_NODE_PORT=1935 '
         + '-e RTMP_ROUTER_MAX_STREAMS_PER_NODE=18 '
         + '-e RTMP_ROUTER_ADMIN_LISTEN=127.0.0.1:9100 '
-        + config.routerImage
+        + '"$ROUTER_IMAGE"'
     );
   }
 
