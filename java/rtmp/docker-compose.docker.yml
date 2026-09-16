@@ -4,7 +4,7 @@ services:
       - "1935:1935"
     volumes:
       - ./traefik/traefik-local.yml:/etc/traefik/traefik.yml:ro
-      - ./traefik/traefik-dynamic-local.yml:/etc/traefik/dynamic/traefik-dynamic.yml:ro
+      - ./traefik/traefik-dynamic-router.yml:/etc/traefik/dynamic/traefik-dynamic.yml:ro
 
   rtmp-server:
     build: .

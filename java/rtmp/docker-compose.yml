@@ -24,5 +24,22 @@ services:
     networks:
       - rtmp-net
 
+  rtmp-router:
+    build:
+      context: ../rtmp-router
+      dockerfile: Dockerfile
+    container_name: rtmp-router
+    environment:
+      REDIS_URI: "redis://redis:6379"
+      RTMP_ROUTER_LISTEN: "0.0.0.0:1935"
+      RTMP_ROUTER_NODE_PORT: "1935"
+      RTMP_ROUTER_MAX_STREAMS_PER_NODE: "18"
+      RTMP_ROUTER_ADMIN_LISTEN: "127.0.0.1:9100"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - rtmp-net
+
 networks:
   rtmp-net:
