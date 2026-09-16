@@ -14,7 +14,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "80:80"
+      - "8080:80"
     volumes:
       - ./traefik/traefik-local.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/traefik-dynamic-dev.yml:/etc/traefik/dynamic/traefik-dynamic.yml:ro
