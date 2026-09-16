@@ -29,6 +29,8 @@ services:
       context: ../rtmp-router
       dockerfile: Dockerfile
     container_name: rtmp-router
+    ports:
+      - "1935:1935"
     environment:
       REDIS_URI: "redis://redis:6379"
       RTMP_ROUTER_LISTEN: "0.0.0.0:1935"

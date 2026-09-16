@@ -103,12 +103,18 @@ public final class ProxyServer {
     }
 
     private void relay(Socket client, Socket upstream) {
-        Thread upstreamToClient = Thread.ofVirtual().name("router-up").start(() -> pump(upstream, client));
-        pump(client, upstream);
+        Thread toUpstream = Thread.ofVirtual().name("router-to-upstream")
+                .start(() -> { pump(client, upstream); shutdownOutput(upstream); });
+        Thread toClient = Thread.ofVirtual().name("router-to-client")
+                .start(() -> { pump(upstream, client); shutdownOutput(client); });
         try {
-            upstreamToClient.join();
+            toUpstream.join();
+            toClient.join();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } finally {
+            closeQuietly(client);
+            closeQuietly(upstream);
         }
     }
 
@@ -121,9 +127,13 @@ public final class ProxyServer {
                 out.flush();
             }
         } catch (IOException ignored) {
-        } finally {
-            closeQuietly(from);
-            closeQuietly(to);
+        }
+    }
+
+    private static void shutdownOutput(Socket socket) {
+        try {
+            socket.shutdownOutput();
+        } catch (IOException ignored) {
         }
     }
 

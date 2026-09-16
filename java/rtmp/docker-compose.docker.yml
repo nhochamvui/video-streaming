@@ -1,7 +1,5 @@
 services:
   traefik:
-    ports:
-      - "1935:1935"
     volumes:
       - ./traefik/traefik-local.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/traefik-dynamic-router.yml:/etc/traefik/dynamic/traefik-dynamic.yml:ro

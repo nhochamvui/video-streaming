@@ -15,18 +15,3 @@ http:
           path: /health/live
           interval: 10s
           timeout: 3s
-tcp:
-  routers:
-    rtmp:
-      entryPoints:
-        - rtmp
-      rule: HostSNI(`*`)
-      service: rtmp
-  services:
-    rtmp:
-      loadBalancer:
-        servers:
-          - address: rtmp-router:1935
-        healthCheck:
-          interval: 15s
-          timeout: 3s
