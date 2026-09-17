@@ -116,8 +116,11 @@ public class RedisNodeRegistry implements NodeRegistry {
     private List<String> scanServerKeys(io.lettuce.core.api.sync.RedisCommands<String, String> redis) {
         java.util.ArrayList<String> keys = new java.util.ArrayList<>();
         KeyScanCursor<String> cursor = redis.scan(ScanArgs.Builder.matches("server:*").limit(100));
-        while (!cursor.isFinished()) {
+        while (true) {
             keys.addAll(cursor.getKeys());
+            if (cursor.isFinished()) {
+                break;
+            }
             cursor = redis.scan(cursor);
         }
         return keys;

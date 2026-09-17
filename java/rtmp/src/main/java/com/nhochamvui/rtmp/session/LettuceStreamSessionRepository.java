@@ -133,13 +133,16 @@ public class LettuceStreamSessionRepository implements StreamSessionRepository {
         return redisProvider.withCommands(redis -> {
             long count = 0;
             KeyScanCursor<String> cursor = redis.scan(ScanArgs.Builder.matches(KEY_PREFIX + "*").limit(100));
-            while (!cursor.isFinished()) {
+            while (true) {
                 for (String key : cursor.getKeys()) {
                     Map<String, String> hash = redis.hgetall(key);
                     if (targetIp.equals(hash.getOrDefault("requestedIp", ""))
                             && targetStatus.equals(hash.getOrDefault("status", ""))) {
                         count++;
                     }
+                }
+                if (cursor.isFinished()) {
+                    break;
                 }
                 cursor = redis.scan(cursor);
             }
