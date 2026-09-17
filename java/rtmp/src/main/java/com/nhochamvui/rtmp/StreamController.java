@@ -3,6 +3,7 @@ package com.nhochamvui.rtmp;
 import com.nhochamvui.rtmp.core.ClientSession;
 import com.nhochamvui.rtmp.core.NodeHealthProbe;
 import com.nhochamvui.rtmp.core.Server;
+import com.nhochamvui.rtmp.metrics.RedisStreamStatsStore;
 import com.nhochamvui.rtmp.session.IngestNode;
 import com.nhochamvui.rtmp.session.NodeRegistry;
 import io.micronaut.context.annotation.Value;
@@ -28,6 +29,7 @@ public class StreamController {
     private final Server server;
     private final NodeHealthProbe nodeHealthProbe;
     private final NodeRegistry nodeRegistry;
+    private final RedisStreamStatsStore streamStatsStore;
     private String indexHtml;
 
     @Value("${rtmp.hls.cdn-url:}")
@@ -42,10 +44,12 @@ public class StreamController {
     @Value("${rtmp.health.max-streams:15}")
     int maxStreams;
 
-    public StreamController(Server server, NodeHealthProbe nodeHealthProbe, NodeRegistry nodeRegistry) {
+    public StreamController(Server server, NodeHealthProbe nodeHealthProbe, NodeRegistry nodeRegistry,
+                            RedisStreamStatsStore streamStatsStore) {
         this.server = server;
         this.nodeHealthProbe = nodeHealthProbe;
         this.nodeRegistry = nodeRegistry;
+        this.streamStatsStore = streamStatsStore;
     }
 
     @Get("/config")
@@ -145,9 +149,8 @@ public class StreamController {
     @Get("/stats")
     @Produces(MediaType.APPLICATION_JSON)
     Map<String, Object> stats() {
-        Map<String, ClientSession> streams = server.getActiveStreams();
-        Map<String, Object> activeStreams = new LinkedHashMap<>();
-        for (Map.Entry<String, ClientSession> entry : streams.entrySet()) {
+        Map<String, Object> activeStreams = new LinkedHashMap<>(streamStatsStore.readAll());
+        for (Map.Entry<String, ClientSession> entry : server.getActiveStreams().entrySet()) {
             activeStreams.put(entry.getKey(), entry.getValue().getStatistics());
         }
         Map<String, Object> result = new LinkedHashMap<>();
@@ -159,13 +162,17 @@ public class StreamController {
     @Produces(MediaType.APPLICATION_JSON)
     Map<String, Object> streamStats(String playbackId) {
         ClientSession session = server.getActiveStreams().get(playbackId);
-        if (session == null) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("error", "Stream not found");
-            result.put("playbackId", playbackId);
-            return result;
+        if (session != null) {
+            return session.getStatistics();
         }
-        return session.getStatistics();
+        Map<String, Object> remote = streamStatsStore.readAll().get(playbackId);
+        if (remote != null) {
+            return remote;
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("error", "Stream not found");
+        result.put("playbackId", playbackId);
+        return result;
     }
 
     @Get("/version")
