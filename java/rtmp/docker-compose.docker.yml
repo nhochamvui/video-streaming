@@ -1,26 +1,71 @@
+x-rtmp-server-env: &rtmp-server-env
+  REDIS_URI: "redis://redis:6379"
+  RTMP_ENDPOINT: "${RTMP_ENDPOINT:-rtmp://localhost/live}"
+  RTMP_PLAYBACK_BASE_URL: "${RTMP_PLAYBACK_BASE_URL:-http://localhost}"
+  RTMP_HLS_ROOT: "/app/hls"
+  RTMP_HMAC_SECRET: "${RTMP_HMAC_SECRET:-Set RTMP_HMAC_SECRET to at least 32 random bytes before starting123123123123123123}"
+  RTMP_AUTH_USERNAME: "${RTMP_AUTH_USERNAME:-admin}"
+  RTMP_AUTH_PASSWORD: "${RTMP_AUTH_PASSWORD:-admin}"
+
+x-rtmp-server: &rtmp-server
+  build: .
+  image: rtmp-server:local
+  depends_on:
+    - redis
+  restart: unless-stopped
+
 services:
   traefik:
     volumes:
       - ./traefik/traefik-local.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/traefik-dynamic-router.yml:/etc/traefik/dynamic/traefik-dynamic.yml:ro
 
-  rtmp-server:
-    build: .
-    container_name: rtmp-server
+  # node-1 reports itself at the stream cap so the router skips it.
+  # It also carries the "rtmp-server" network alias used by traefik for HTTP.
+  rtmp-server-1:
+    <<: *rtmp-server
+    container_name: rtmp-server-1
+    ports:
+      - "8881:8888"
     environment:
-      REDIS_URI: "redis://redis:6379"
-      RTMP_SERVER_ID: "${RTMP_SERVER_ID:-local-node}"
-      RTMP_ENDPOINT: "${RTMP_ENDPOINT:-rtmp://localhost/live}"
-      RTMP_PLAYBACK_BASE_URL: "${RTMP_PLAYBACK_BASE_URL:-http://localhost}"
-      RTMP_HLS_ROOT: "/app/hls"
-      RTMP_HMAC_SECRET: "${RTMP_HMAC_SECRET:-Set RTMP_HMAC_SECRET to at least 32 random bytes before starting123123123123123123}"
-      RTMP_AUTH_USERNAME: "${RTMP_AUTH_USERNAME:-admin}"
-      RTMP_AUTH_PASSWORD: "${RTMP_AUTH_PASSWORD:-admin}"
+      <<: *rtmp-server-env
+      RTMP_SERVER_ID: "node-1"
+      RTMP_HEARTBEAT_OVERRIDE_ACTIVE_STREAMS: "18"
     volumes:
       - ./hls:/app/hls
       - ./logs:/app/logs
-    depends_on:
-      - redis
-    restart: unless-stopped
+    networks:
+      rtmp-net:
+        aliases:
+          - rtmp-server
+
+  rtmp-server-2:
+    <<: *rtmp-server
+    container_name: rtmp-server-2
+    ports:
+      - "8882:8888"
+    environment:
+      <<: *rtmp-server-env
+      RTMP_SERVER_ID: "node-2"
+      RTMP_HEARTBEAT_OVERRIDE_ACTIVE_STREAMS: "0"
+    volumes:
+      - ./hls:/app/hls
+      - ./logs:/app/logs
+    networks:
+      - rtmp-net
+
+  # node-3 reports 5 so the router deterministically prefers node-2 (fewest streams).
+  rtmp-server-3:
+    <<: *rtmp-server
+    container_name: rtmp-server-3
+    ports:
+      - "8883:8888"
+    environment:
+      <<: *rtmp-server-env
+      RTMP_SERVER_ID: "node-3"
+      RTMP_HEARTBEAT_OVERRIDE_ACTIVE_STREAMS: "5"
+    volumes:
+      - ./hls:/app/hls
+      - ./logs:/app/logs
     networks:
       - rtmp-net

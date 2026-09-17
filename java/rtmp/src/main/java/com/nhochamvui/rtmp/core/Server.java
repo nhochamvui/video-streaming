@@ -33,6 +33,7 @@ public class Server {
     private final String hlsRegion;
     private final String hlsCdnUrl;
     private final int maxActiveStreams;
+    private final int overrideActiveStreams;
     private final RtmpThrottleConfig throttle;
 
     public Server(
@@ -45,6 +46,7 @@ public class Server {
             @Value("${rtmp.hls.region:}") String hlsRegion,
             @Value("${rtmp.hls.cdn-url:}") String hlsCdnUrl,
             @Value("${rtmp.limits.active-streams-per-node:18}") int maxActiveStreams,
+            @Value("${rtmp.heartbeat.override-active-streams:-1}") int overrideActiveStreams,
             @Value("${rtmp.throttle.min-streams:18}") int throttleMinStreams,
             @Value("${rtmp.throttle.handshake-ms:0}") long throttleHandshakeMs,
             @Value("${rtmp.throttle.chunk-size-ms:0}") long throttleChunkSizeMs,
@@ -59,8 +61,9 @@ public class Server {
         this.hlsRegion = hlsRegion;
         this.hlsCdnUrl = hlsCdnUrl;
         this.maxActiveStreams = maxActiveStreams;
+        this.overrideActiveStreams = overrideActiveStreams;
         this.throttle = new RtmpThrottleConfig(throttleMinStreams, throttleHandshakeMs, throttleChunkSizeMs, throttlePublishMs);
-        log.info("RTMP Server initialized | serverId={} | port={} | hlsBucket={} | hlsRegion={} | maxActiveStreams={} | throttle={}", this.serverId, port, hlsBucket, hlsRegion, maxActiveStreams, this.throttle);
+        log.info("RTMP Server initialized | serverId={} | port={} | hlsBucket={} | hlsRegion={} | maxActiveStreams={} | overrideActiveStreams={} | throttle={}", this.serverId, port, hlsBucket, hlsRegion, maxActiveStreams, overrideActiveStreams, this.throttle);
     }
 
     public void listen() {
@@ -118,7 +121,8 @@ public class Server {
     @Scheduled(fixedDelay = "5s", initialDelay = "1s")
     void heartbeatNode() {
         try {
-            nodeRegistry.heartbeat(streams.size(), streams.keySet());
+            int reportedStreams = overrideActiveStreams >= 0 ? overrideActiveStreams : streams.size();
+            nodeRegistry.heartbeat(reportedStreams, streams.keySet());
         } catch (Exception e) {
             log.warn("Failed to heartbeat RTMP node: {}", e.getMessage());
         }
