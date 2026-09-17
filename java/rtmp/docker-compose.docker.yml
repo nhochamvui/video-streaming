@@ -20,8 +20,7 @@ services:
       - ./traefik/traefik-local.yml:/etc/traefik/traefik.yml:ro
       - ./traefik/traefik-dynamic-router.yml:/etc/traefik/dynamic/traefik-dynamic.yml:ro
 
-  # node-1 reports itself at the stream cap so the router skips it.
-  # It also carries the "rtmp-server" network alias used by traefik for HTTP.
+  # node-1 carries the "rtmp-server" network alias used by traefik for HTTP.
   rtmp-server-1:
     <<: *rtmp-server
     container_name: rtmp-server-1
@@ -30,7 +29,6 @@ services:
     environment:
       <<: *rtmp-server-env
       RTMP_SERVER_ID: "node-1"
-      RTMP_HEARTBEAT_OVERRIDE_ACTIVE_STREAMS: "18"
     volumes:
       - ./hls:/app/hls
       - ./logs:/app/logs
@@ -47,14 +45,12 @@ services:
     environment:
       <<: *rtmp-server-env
       RTMP_SERVER_ID: "node-2"
-      RTMP_HEARTBEAT_OVERRIDE_ACTIVE_STREAMS: "0"
     volumes:
       - ./hls:/app/hls
       - ./logs:/app/logs
     networks:
       - rtmp-net
 
-  # node-3 reports 5 so the router deterministically prefers node-2 (fewest streams).
   rtmp-server-3:
     <<: *rtmp-server
     container_name: rtmp-server-3
@@ -63,7 +59,6 @@ services:
     environment:
       <<: *rtmp-server-env
       RTMP_SERVER_ID: "node-3"
-      RTMP_HEARTBEAT_OVERRIDE_ACTIVE_STREAMS: "5"
     volumes:
       - ./hls:/app/hls
       - ./logs:/app/logs
