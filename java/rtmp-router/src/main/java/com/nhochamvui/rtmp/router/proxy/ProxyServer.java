@@ -14,6 +14,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -27,6 +28,7 @@ public final class ProxyServer {
     private final NodeSelector selector;
     private final RouterMetrics metrics;
     private final AtomicInteger staticRoundRobin = new AtomicInteger();
+    private final ConcurrentHashMap<String, AtomicInteger> inFlight = new ConcurrentHashMap<>();
 
     public ProxyServer(RouterConfig config, NodeRegistryClient registry, NodeSelector selector, RouterMetrics metrics) {
         this.config = config;
@@ -54,6 +56,7 @@ public final class ProxyServer {
 
     private void handle(Socket client) {
         metrics.connectionAccepted();
+        String countedNode = null;
         try {
             client.setTcpNoDelay(true);
             Optional<IngestNode> selected = selectNode();
@@ -67,6 +70,8 @@ public final class ProxyServer {
             Socket upstream = new Socket();
             upstream.connect(new InetSocketAddress(node.host(), config.nodePort()), config.connectTimeoutMs());
             upstream.setTcpNoDelay(true);
+            countedNode = node.serverId();
+            incrementInFlight(countedNode);
             metrics.routed(node.serverId());
             log.info("route " + client.getRemoteSocketAddress() + " -> " + node.serverId() + " (" + node.host() + ")");
             relay(client, upstream);
@@ -75,6 +80,9 @@ public final class ProxyServer {
             log.log(Level.WARNING, "connection error: " + e.getMessage());
             closeQuietly(client);
         } finally {
+            if (countedNode != null) {
+                decrementInFlight(countedNode);
+            }
             metrics.connectionClosed();
         }
     }
@@ -82,11 +90,27 @@ public final class ProxyServer {
     private Optional<IngestNode> selectNode() {
         try {
             List<IngestNode> nodes = registry.fetchNodes();
-            return selector.select(nodes, System.currentTimeMillis());
+            return selector.select(nodes, System.currentTimeMillis(), this::inFlight);
         } catch (IOException e) {
             log.log(Level.WARNING, "redis lookup failed (" + e.getMessage() + "), using static fallback");
             metrics.fallback();
             return selectStatic();
+        }
+    }
+
+    private int inFlight(String serverId) {
+        AtomicInteger counter = inFlight.get(serverId);
+        return counter == null ? 0 : counter.get();
+    }
+
+    private void incrementInFlight(String serverId) {
+        inFlight.computeIfAbsent(serverId, key -> new AtomicInteger()).incrementAndGet();
+    }
+
+    private void decrementInFlight(String serverId) {
+        AtomicInteger counter = inFlight.get(serverId);
+        if (counter != null) {
+            counter.decrementAndGet();
         }
     }
 

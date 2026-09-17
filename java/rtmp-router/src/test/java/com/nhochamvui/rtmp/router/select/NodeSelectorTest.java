@@ -30,13 +30,51 @@ class NodeSelectorTest {
     }
 
     @Test
-    void tieBreaksByCpuThenMemory() {
+    void tieBreaksByMemoryThenCpu() {
         List<IngestNode> nodes = List.of(
-                node("a", "10.0.0.1", "ACTIVE", 4, 0.8, 10),
-                node("b", "10.0.0.2", "ACTIVE", 4, 0.2, 70),
-                node("c", "10.0.0.3", "ACTIVE", 4, 0.2, 30));
+                node("a", "10.0.0.1", "ACTIVE", 4, 0.2, 30),
+                node("b", "10.0.0.2", "ACTIVE", 4, 0.1, 10),
+                node("c", "10.0.0.3", "ACTIVE", 4, 0.9, 10));
 
-        assertEquals("c", selector.select(nodes, NOW).orElseThrow().serverId());
+        // b and c have the lowest memory (10); b wins on lower cpu.
+        assertEquals("b", selector.select(nodes, NOW).orElseThrow().serverId());
+    }
+
+    @Test
+    void leastConnectionsPrefersLowerInFlight() {
+        List<IngestNode> nodes = List.of(
+                node("a", "10.0.0.1", "ACTIVE", 0, 0, 0),
+                node("b", "10.0.0.2", "ACTIVE", 0, 0, 0));
+
+        // a has one connection already open on the router; b is idle.
+        assertEquals("b", selector.select(nodes, NOW, id -> "a".equals(id) ? 1 : 0).orElseThrow().serverId());
+    }
+
+    @Test
+    void inFlightRaisesEffectiveLoadAboveReported() {
+        List<IngestNode> nodes = List.of(
+                node("a", "10.0.0.1", "ACTIVE", 1, 0, 0),
+                node("b", "10.0.0.2", "ACTIVE", 0, 0, 0));
+
+        // a reports 1 stream but the router has 3 in flight -> effective load 3 vs b's 0.
+        assertEquals("b", selector.select(nodes, NOW, id -> "a".equals(id) ? 3 : 0).orElseThrow().serverId());
+    }
+
+    @Test
+    void inFlightCountsTowardCap() {
+        List<IngestNode> nodes = List.of(
+                node("a", "10.0.0.1", "ACTIVE", 0, 0, 0),
+                node("b", "10.0.0.2", "ACTIVE", 0, 0, 0));
+
+        // a is at cap only in the router's real-time view.
+        assertEquals("b", selector.select(nodes, NOW, id -> "a".equals(id) ? 18 : 0).orElseThrow().serverId());
+    }
+
+    @Test
+    void returnsEmptyWhenAllAtCapViaInFlight() {
+        List<IngestNode> nodes = List.of(node("a", "10.0.0.1", "ACTIVE", 0, 0, 0));
+
+        assertTrue(selector.select(nodes, NOW, id -> 18).isEmpty());
     }
 
     @Test

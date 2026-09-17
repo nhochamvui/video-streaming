@@ -37,6 +37,11 @@ services:
       RTMP_ROUTER_NODE_PORT: "1935"
       RTMP_ROUTER_MAX_STREAMS_PER_NODE: "18"
       RTMP_ROUTER_ADMIN_LISTEN: "127.0.0.1:9100"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 150M
     depends_on:
       - redis
     restart: unless-stopped
