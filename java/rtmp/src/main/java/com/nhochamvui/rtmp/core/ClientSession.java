@@ -205,10 +205,12 @@ public class ClientSession {
         int c0 = inputStream.read();
         byte[] c1 = readToBuffer(inputStream, HANDSHAKE_LENGTH);
         sendS0S1(c0);
+        outputStream.flush();
         if (throttle.enabled(server.activeStreamCount())) {
             sleepMs("handshake", throttle.handshakeMs());
         }
         sendS2(c1);
+        outputStream.flush();
         byte[] c2 = readToBuffer(inputStream, HANDSHAKE_LENGTH);
         log.info("[{}] Handshake finished.", connectionId);
     }
